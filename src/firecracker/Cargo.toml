@@ -81,3 +81,11 @@ path = "examples/seccomp/malicious.rs"
 [[example]]
 name = "seccomp_panic"
 path = "examples/seccomp/panic.rs"
+
+[[example]]
+name = "uffd_valid_count_handler"
+path = "examples/uffd/valid_count_handler.rs"
+
+[[example]]
+name = "uffd_valid_count_periodic_handler"
+path = "examples/uffd/valid_count_periodic_handler.rs"

@@ -240,7 +240,7 @@ def uffd_handler_paths():
     """Build UFFD handler binaries."""
     handlers = {
         f"{handler}_handler": build_tools.get_example(f"uffd_{handler}_handler")
-        for handler in ["malicious", "valid", "fault_all"]
+        for handler in ["malicious", "valid", "fault_all", "valid_count"]
     }
     yield handlers
 

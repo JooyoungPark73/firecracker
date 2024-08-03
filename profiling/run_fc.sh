@@ -44,14 +44,14 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
 sudo curl -X PUT --unix-socket "${API_SOCKET}" \
     --data "{
         \"vcpu_count\": 2,
-        \"mem_size_mib\": 512,
+        \"mem_size_mib\": 1024,
         \"track_dirty_pages\": true
     }" \
     "http://localhost/machine-config"
 
 ###
 
-KERNEL="./ubuntu/vmlinux-5.10.210"
+KERNEL="./ubuntu/vmlinux-6.1.102"
 KERNEL_BOOT_ARGS="console=ttyS0 reboot=k panic=1 pci=off"
 
 ARCH=$(uname -m)
@@ -69,6 +69,18 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
     "http://localhost/boot-source"
 
 ROOTFS="./ubuntu/ubuntu-22.04.ext4"
+
+# # Set vsock
+# VSOCK_DIR="/tmp/v.sock"
+# sudo rm ${VSOCK_DIR}
+# sudo curl --unix-socket "${API_SOCKET}" -i \
+#     -X PUT 'http://localhost/vsock' \
+#     -H 'Accept: application/json' \
+#     -H 'Content-Type: application/json' \
+#     -d '{
+#         "guest_cid": 3,
+#         "uds_path": "'${VSOCK_DIR}'"
+#     }'
 
 # Set rootfs
 sudo curl -X PUT --unix-socket "${API_SOCKET}" \
@@ -107,7 +119,7 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
 
 # API requests are handled asynchronously, it is important the microVM has been
 # started before we attempt to SSH into it.
-sleep 2s
+sleep 5s
 
 # Setup internet access in the guest
 ssh -i ./ubuntu/ubuntu-22.04.id_rsa root@172.16.0.2  "ip route add default via 172.16.0.1 dev eth0"
@@ -116,7 +128,7 @@ ssh -i ./ubuntu/ubuntu-22.04.id_rsa root@172.16.0.2  "ip route add default via 1
 ssh -i ./ubuntu/ubuntu-22.04.id_rsa root@172.16.0.2  "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
 
 # Create apt file 
-ssh -i ./ubuntu/ubuntu-22.04.id_rsa root@172.16.0.2  "touch /var/lib/dpkg/status"
+# ssh -i ./ubuntu/ubuntu-22.04.id_rsa root@172.16.0.2  "touch /var/lib/dpkg/status"
 
 # SSH into the microVM
 ssh -i ./ubuntu/ubuntu-22.04.id_rsa root@172.16.0.2

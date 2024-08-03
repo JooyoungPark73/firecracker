@@ -26,7 +26,7 @@ function dir2ext4img {
     local DIR=$1
     local IMG=$2
     # Default size for the resulting rootfs image is 300M
-    local SIZE=${3:-4096M}
+    local SIZE=${3:-1024M}
     local TMP_MNT=$(mktemp -d)
     truncate -s "$SIZE" "$IMG"
     mkfs.ext4 -F "$IMG"

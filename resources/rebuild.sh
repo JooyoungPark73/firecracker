@@ -220,11 +220,11 @@ clone_amazon_linux_repo
 # Apply kernel patches on top of AL configuration
 apply_kernel_patches_for_ci
 
-build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-4.14.config
-build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config
-if [ $ARCH == "x86_64" ]; then
-    build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config
-fi
+# build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-4.14.config
+# build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config
+# if [ $ARCH == "x86_64" ]; then
+#     build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config
+# fi
 build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config
 
 tree -h $OUTPUT_DIR

@@ -13,6 +13,9 @@ cp -ruv $rootfs/* /
 
 packages="udev systemd-sysv openssh-server iproute2 curl socat python3-minimal iperf3 iputils-ping fio kmod tmux hwloc-nox vim-tiny trace-cmd linuxptp strace"
 
+# Add pylon workload dependencies
+packages="$packages python3-pip htop git wget vim net-tools rsync numactl libegl1 libgl1"
+
 # msr-tools is only supported on x86-64.
 arch=$(uname -m)
 if [ "${arch}" == "x86_64" ]; then
@@ -28,6 +31,10 @@ apt autoremove
 echo "ubuntu-fc-uvm" > /etc/hostname
 
 passwd -d root
+
+# Install pylon workload dependencies
+pip3 install grpcio grpcio-tools pyaes boto3 pillow scikit-learn opencv-python-headless pandas imgaug psutil mxnet minio chameleon
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # The serial getty service hooks up the login prompt to the kernel console
 # at ttyS0 (where Firecracker connects its serial console). We'll set it up

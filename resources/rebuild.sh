@@ -26,7 +26,7 @@ function dir2ext4img {
     local DIR=$1
     local IMG=$2
     # Default size for the resulting rootfs image is 300M
-    local SIZE=${3:-1024M}
+    local SIZE=${3:-4096M}
     local TMP_MNT=$(mktemp -d)
     truncate -s "$SIZE" "$IMG"
     mkfs.ext4 -F "$IMG"
@@ -85,6 +85,9 @@ mkdir -pv $rootfs/{dev,proc,sys,run,tmp,var/lib/systemd}
 # So apt works
 mkdir -pv $rootfs/var/lib/dpkg/
 EOF
+
+    cp $PWD/overlay-init $rootfs/sbin/overlay-init
+    chmod 755 $rootfs/sbin/overlay-init
 
     # TBD what abt /etc/hosts?
     echo | tee $rootfs/etc/resolv.conf

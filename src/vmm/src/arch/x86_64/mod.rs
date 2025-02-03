@@ -140,6 +140,21 @@ pub fn arch_memory_regions(offset: usize, size: usize) -> Vec<(GuestAddress, usi
     }
 }
 
+/// TBD
+pub fn arch_first_contiguous_region(offset: usize, size: usize) -> GuestAddress {
+    match (size + offset).checked_sub(u64_to_usize(MMIO_MEM_START)) {
+        // case 1: region fits before the gap
+        None | Some(0) => GuestAddress(offset as u64),
+        Some(remaining) => {
+            if offset < u64_to_usize(FIRST_ADDR_PAST_32BITS) {
+                GuestAddress(FIRST_ADDR_PAST_32BITS + remaining as u64)
+            } else {
+                GuestAddress(offset as u64)
+            }
+        }
+    }
+}
+
 /// Returns the memory address where the kernel could be loaded.
 pub fn get_kernel_start() -> u64 {
     layout::HIMEM_START

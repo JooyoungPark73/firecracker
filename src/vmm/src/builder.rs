@@ -46,6 +46,7 @@ use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::mmio::MmioTransport;
 use crate::devices::virtio::net::Net;
+use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 #[cfg(feature = "gdb")]
@@ -278,6 +279,16 @@ pub fn build_microvm_for_boot(
         &mut vmm,
         &mut boot_cmdline,
         vm_resources.net_builder.iter(),
+        event_manager,
+    )?;
+    debug!(
+        "vmm: atthaching {} pmem devices",
+        vm_resources.pmem.devices.len()
+    );
+    attach_pmem_devices(
+        &mut vmm,
+        &mut boot_cmdline,
+        vm_resources.pmem.devices.iter(),
         event_manager,
     )?;
 
@@ -759,6 +770,38 @@ fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
         let id = net_device.lock().expect("Poisoned lock").id().clone();
         // The device mutex mustn't be locked here otherwise it will deadlock.
         attach_virtio_device(event_manager, vmm, id, net_device.clone(), cmdline, false)?;
+    }
+    Ok(())
+}
+
+fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
+    vmm: &mut Vmm,
+    cmdline: &mut LoaderKernelCmdline,
+    pmem_devices: I,
+    event_manager: &mut EventManager,
+) -> Result<(), StartMicrovmError> {
+    use vm_memory::GuestMemory;
+    let mut addr = vmm.vm.common.guest_memory.last_addr().0 + 1;
+    for (i, dev) in pmem_devices.enumerate() {
+        addr = crate::utils::align_up(addr, Pmem::ALIGNMENT);
+        let id = {
+            let mut locked_dev = dev.lock().expect("Poisoned lock");
+
+            if locked_dev.root_device {
+                let s = format!("root=/dev/pmem{i} rw rootflags=dax");
+                cmdline.insert_str(s)?;
+            }
+            locked_dev.config_space.start = addr;
+            locked_dev.mem_slot = Pmem::MEM_SLOTS_START + i as u32;
+            locked_dev.set_mem_region(&vmm.vm.common.fd);
+
+            let mapping_size = locked_dev.config_space.size;
+            addr += mapping_size;
+
+            locked_dev.id().to_string()
+        };
+
+        attach_virtio_device(event_manager, vmm, id, dev.clone(), cmdline, false)?;
     }
     Ok(())
 }

@@ -28,6 +28,7 @@ use crate::vmm_config::machine_config::{
 use crate::vmm_config::metrics::{MetricsConfig, MetricsConfigError, init_metrics};
 use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::*;
+use crate::vmm_config::pmem::{PmemBuilder, PmemConfigError, PmemDeviceConfig};
 use crate::vmm_config::vsock::*;
 use crate::vstate::memory;
 use crate::vstate::memory::{GuestRegionMmap, MemoryError};
@@ -61,6 +62,8 @@ pub enum ResourcesError {
     VsockDevice(#[from] VsockConfigError),
     /// Entropy device error: {0}
     EntropyDevice(#[from] EntropyDeviceError),
+    /// Pmem device error: {0}
+    PmemDevice(#[from] PmemConfigError),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -86,6 +89,8 @@ pub struct VmmConfig {
     network_interfaces: Vec<NetworkInterfaceConfig>,
     vsock: Option<VsockDeviceConfig>,
     entropy: Option<EntropyDeviceConfig>,
+    #[serde(rename = "pmem")]
+    pmem_devices: Vec<PmemDeviceConfig>,
 }
 
 /// A data structure that encapsulates the device configurations
@@ -106,6 +111,8 @@ pub struct VmResources {
     pub net_builder: NetBuilder,
     /// The entropy device builder.
     pub entropy: EntropyDeviceBuilder,
+    /// The pmem devices.
+    pub pmem: PmemBuilder,
     /// The optional Mmds data store.
     // This is initialised on demand (if ever used), so that we don't allocate it unless it's
     // actually used.
@@ -169,6 +176,10 @@ impl VmResources {
 
         if let Some(vsock_config) = vmm_config.vsock {
             resources.set_vsock_device(vsock_config)?;
+        }
+
+        for pmem_config in vmm_config.pmem_devices.into_iter() {
+            resources.build_pmem_device(pmem_config)?;
         }
 
         if let Some(balloon_config) = vmm_config.balloon {
@@ -236,6 +247,9 @@ impl VmResources {
             }
             SharedDeviceType::Entropy(entropy) => {
                 self.entropy.set_device(entropy);
+            }
+            SharedDeviceType::Pmem(pmem) => {
+                self.pmem.add_device(pmem);
             }
         }
 
@@ -361,6 +375,12 @@ impl VmResources {
         body: NetworkInterfaceConfig,
     ) -> Result<(), NetworkInterfaceError> {
         let _ = self.net_builder.build(body)?;
+        Ok(())
+    }
+
+    /// Builds a pmem device to be attached when the VM starts.
+    pub fn build_pmem_device(&mut self, body: PmemDeviceConfig) -> Result<(), PmemConfigError> {
+        let _ = self.pmem.build(body)?;
         Ok(())
     }
 
@@ -503,6 +523,7 @@ impl From<&VmResources> for VmmConfig {
             network_interfaces: resources.net_builder.configs(),
             vsock: resources.vsock.config(),
             entropy: resources.entropy.config(),
+            pmem_devices: resources.pmem.configs(),
         }
     }
 }
@@ -613,6 +634,7 @@ mod tests {
             boot_timer: false,
             mmds_size_limit: HTTP_MAX_PAYLOAD_SIZE,
             entropy: Default::default(),
+            pmem: Default::default(),
         }
     }
 

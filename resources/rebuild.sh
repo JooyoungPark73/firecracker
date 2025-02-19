@@ -92,6 +92,9 @@ EOF
     # TBD what abt /etc/hosts?
     echo | tee $rootfs/etc/resolv.conf
 
+    # symlink /etc/resolv.conf to /proc/net/pnp to add DNS with Firecracker Go SDK
+    ln -f -s /proc/net/pnp $rootfs/etc/resolv.conf
+    
     # Generate key for ssh access from host
     if [ ! -s id_rsa ]; then
         ssh-keygen -f id_rsa -N ""

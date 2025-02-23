@@ -65,6 +65,8 @@ function build_rootfs {
     # Launch Docker
     prepare_docker
 
+    # Uncomment this to use busybox from host. One on repo is from Ubuntu 22.04
+    # cp /usr/bin/busybox overlay/usr/local/bin/busybox
     cp -rvf overlay/* $rootfs
 
     # curl -O https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-amd64-root.tar.xz
@@ -84,11 +86,11 @@ for d in $dirs; do tar c "/$d" | tar x -C $rootfs; done
 mkdir -pv $rootfs/{dev,proc,sys,run,tmp,var/lib/systemd}
 # So apt works
 mkdir -pv $rootfs/var/lib/dpkg/
+
+# Add temp folders for overlayFS
+mkdir -pv $rootfs/{overlay/root,overlay/work,mnt,rom}
+
 EOF
-
-    cp $PWD/overlay-init $rootfs/sbin/overlay-init
-    chmod 755 $rootfs/sbin/overlay-init
-
     # TBD what abt /etc/hosts?
     echo | tee $rootfs/etc/resolv.conf
 

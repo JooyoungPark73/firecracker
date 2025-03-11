@@ -1,0 +1,58 @@
+integration_tests/test_network_footprint.py::test_do_nothing_footprint[vmlinux-6.1.128-vmlinux-5.10.233] resize2fs 1.47.0 (5-Feb-2023)
+RTNETLINK answers: No such process
+
+Booted before echo: 772532
+Booted after echo: 772532
+defaultdict(<class 'int'>, {'total_rss': 772532, 'overhead_rss': 2524, 'guest_rss': 770008, 'binary_rss': 2092})
+Restore snapshot: 23188
+Restore snapshot: VmRSS:           22272 kB
+
+defaultdict(<class 'int'>, {'total_rss': 23188, 'overhead_rss': 2748, 'guest_rss': 20440, 'binary_rss': 2252})
+Stable RSS: 23208
+PASSED
+integration_tests/test_network_footprint.py::test_http_server_footprint[vmlinux-6.1.128-vmlinux-5.10.233] resize2fs 1.47.0 (5-Feb-2023)
+
+Booted before python: 773128
+Booted after python: 773128
+Stable RSS: 773128
+Booted after curl: 773128
+defaultdict(<class 'int'>, {'total_rss': 773128, 'overhead_rss': 2524, 'guest_rss': 770604, 'binary_rss': 2092})
+Restore before curl: 23380
+defaultdict(<class 'int'>, {'total_rss': 23380, 'overhead_rss': 2748, 'guest_rss': 20632, 'binary_rss': 2252})
+RTNETLINK answers: No such process
+Restore after curl: 28952
+Restore after curl: VmRSS:         28160 kB
+
+defaultdict(<class 'int'>, {'total_rss': 28952, 'overhead_rss': 2748, 'guest_rss': 26204, 'binary_rss': 2252})
+Stable RSS: 28972
+PASSED
+integration_tests/test_network_footprint.py::test_grpc_server_footprint[vmlinux-6.1.128-vmlinux-5.10.233] resize2fs 1.47.0 (5-Feb-2023)
+
+Booted before python: 772024
+Booted after python: 772024
+Stable RSS: 772024
+Booted after grpc client: 772024
+defaultdict(<class 'int'>, {'total_rss': 772024, 'overhead_rss': 2684, 'guest_rss': 769340, 'binary_rss': 2252})
+Restore before grpc client: 24064
+defaultdict(<class 'int'>, {'total_rss': 24064, 'overhead_rss': 2660, 'guest_rss': 21404, 'binary_rss': 2164})
+Restore after grpc client: 30168
+Restore after grpc client: VmRSS:          28928 kB
+
+defaultdict(<class 'int'>, {'total_rss': 30168, 'overhead_rss': 2660, 'guest_rss': 27508, 'binary_rss': 2164})
+Stable RSS: 30168
+PASSED
+integration_tests/test_network_footprint.py::test_grpc_server_footprint_s3[vmlinux-6.1.128-vmlinux-5.10.233] resize2fs 1.47.0 (5-Feb-2023)
+
+Booted before python: 771980
+Booted after python: 771980
+Stable RSS: 771980
+Booted after grpc server: 771980
+defaultdict(<class 'int'>, {'total_rss': 771980, 'overhead_rss': 2580, 'guest_rss': 769400, 'binary_rss': 2156})
+Restore before grpc client: 23664
+defaultdict(<class 'int'>, {'total_rss': 23664, 'overhead_rss': 2748, 'guest_rss': 20916, 'binary_rss': 2252})
+Restore after grpc client: 47868
+Restore after grpc client: VmRSS:          46848 kB
+
+defaultdict(<class 'int'>, {'total_rss': 47868, 'overhead_rss': 2748, 'guest_rss': 45120, 'binary_rss': 2252})
+Stable RSS: 47892
+PASSED

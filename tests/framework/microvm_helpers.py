@@ -189,6 +189,14 @@ class MicrovmHelpers:
         run(
             f"iptables -t nat -A POSTROUTING -s {veth_net} -o {upstream_dev} -j MASQUERADE"
         )
+        
+        # Remove any existing default route in the namespace before adding the new one
+        try:
+            run_in_netns("ip route del default")
+        except subprocess.CalledProcessError:
+            # Ignore error if no default route exists
+            pass
+            
         run_in_netns(f"ip route add default via {veth_host_ip}")
         run_in_netns(
             f"iptables -t nat -A POSTROUTING -s {tap_net} -o {veth_guest} -j MASQUERADE"

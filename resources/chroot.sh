@@ -35,8 +35,8 @@ echo "ubuntu-fc-uvm" > /etc/hostname
 passwd -d root
 
 # Install pylon workload dependencies
-pip3 install grpcio grpcio-tools
-# pip3 install pyaes boto3 pillow scikit-learn opencv-python-headless pandas imgaug psutil mxnet minio chameleon
+pip3 install grpcio grpcio-tools flatbuffers boto3
+# pip3 install pyaes pillow scikit-learn opencv-python-headless pandas imgaug psutil mxnet minio chameleon
 # pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # The serial getty service hooks up the login prompt to the kernel console

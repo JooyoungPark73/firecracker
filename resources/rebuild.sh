@@ -86,6 +86,8 @@ for d in $dirs; do tar c "/$d" | tar x -C $rootfs; done
 mkdir -pv $rootfs/{dev,proc,sys,run,tmp,var/lib/systemd}
 # So apt works
 mkdir -pv $rootfs/var/lib/dpkg/
+# So chrony works
+mkdir -pv $rootfs/var/lib/chrony/
 
 # Add temp folders for overlayFS
 mkdir -pv $rootfs/{overlay/root,overlay/work,mnt,rom}

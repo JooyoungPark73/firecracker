@@ -14,9 +14,9 @@ cp -ruv $rootfs/* /
 packages="udev systemd-sysv openssh-server iproute2 curl socat python3-minimal iperf3 iputils-ping fio kmod tmux hwloc-nox vim-tiny trace-cmd linuxptp strace"
 
 # Add pylon workload dependencies
-packages="$packages python3-pip htop git wget vim net-tools rsync numactl"
+packages="$packages python3-pip htop git wget vim net-tools rsync numactl chrony"
 # Add OpenCV library dependencies
-# packages="$packages libegl1 libgl1"
+packages="$packages libegl1 libgl1"
 
 # msr-tools is only supported on x86-64.
 arch=$(uname -m)
@@ -31,6 +31,9 @@ apt autoremove
 
 # Set a hostname.
 echo "ubuntu-fc-uvm" > /etc/hostname
+
+# set chrony
+echo 'refclock PHC /dev/ptp0 poll -6 dpoll -6 offset 0' >> /etc/chrony/chrony.conf
 
 passwd -d root
 

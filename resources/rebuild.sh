@@ -46,6 +46,9 @@ function build_rootfs {
     # Launch Docker
     prepare_docker
 
+    # Uncomment this to use busybox from host. One on repo is from Ubuntu 24.04
+    # cp /usr/bin/busybox overlay/usr/local/bin/busybox
+
     cp -rvf overlay/* $rootfs
 
     # curl -O https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64-root.tar.xz
@@ -65,10 +68,27 @@ for d in $dirs; do tar c "/$d" | tar x -C $rootfs; done
 mkdir -pv $rootfs/{dev,proc,sys,run,tmp,var/lib/systemd}
 # So apt works
 mkdir -pv $rootfs/var/lib/dpkg/
+
+# So chrony works
+mkdir -pv $rootfs/var/lib/chrony/
+
+# So overlayFS works
+mkdir -pv $rootfs/{overlay/root,overlay/work,mnt,rom}
 EOF
 
     # TBD what abt /etc/hosts?
     echo | tee $rootfs/etc/resolv.conf
+
+    ln -f -s /proc/net/pnp $rootfs/etc/resolv.conf
+
+    # Generate key for ssh access from host
+    if [ ! -s id_rsa ]; then
+        ssh-keygen -f id_rsa -N ""
+    fi
+    install -d -m 0600 "$rootfs/root/.ssh/"
+    cp id_rsa.pub "$rootfs/root/.ssh/authorized_keys"
+    id_rsa=$OUTPUT_DIR/$ROOTFS_NAME.id_rsa
+    cp id_rsa $id_rsa
 
     rootfs_img="$OUTPUT_DIR/$ROOTFS_NAME.squashfs"
     mv $rootfs/root/manifest $OUTPUT_DIR/$ROOTFS_NAME.manifest

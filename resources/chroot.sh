@@ -13,6 +13,11 @@ cp -ruv $rootfs/* /
 
 packages="udev systemd-sysv openssh-server iproute2 curl socat python3-minimal iperf3 iputils-ping fio kmod tmux hwloc-nox vim-tiny trace-cmd linuxptp strace"
 
+# Add nexus workload dependencies
+packages="$packages python3-pip htop git wget vim net-tools rsync numactl chrony"
+# Add OpenCV library dependencies
+packages="$packages libegl1 libgl1"
+
 # msr-tools is only supported on x86-64.
 arch=$(uname -m)
 if [ "${arch}" == "x86_64" ]; then
@@ -27,7 +32,17 @@ apt autoremove
 # Set a hostname.
 echo "ubuntu-fc-uvm" > /etc/hostname
 
+# set chrony
+echo 'refclock PHC /dev/ptp0 poll -7 dpoll -7 offset 0' >> /etc/chrony/chrony.conf
+
 passwd -d root
+
+# Install pylon workload dependencies
+pip_packages="grpcio grpcio-tools flatbuffers boto3"
+pip_packages="$pip_packages pyaes pillow scikit-learn opencv-python-headless pandas imgaug psutil mxnet minio chameleon"
+pip3 install $pip_packages --break-system-packages
+
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu --break-system-packages
 
 # The serial getty service hooks up the login prompt to the kernel console
 # at ttyS0 (where Firecracker connects its serial console). We'll set it up

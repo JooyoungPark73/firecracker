@@ -44,6 +44,8 @@ pip3 install $pip_packages --break-system-packages
 
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu --break-system-packages
 
+pip3 cache purge
+
 # The serial getty service hooks up the login prompt to the kernel console
 # at ttyS0 (where Firecracker connects its serial console). We'll set it up
 # for autologin to avoid the login prompt.

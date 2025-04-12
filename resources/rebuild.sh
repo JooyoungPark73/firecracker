@@ -183,6 +183,9 @@ function build_al_kernel {
         echo "FATAL: Unsupported architecture!"
         exit 1
     fi
+
+    patch -p1 < $GIT_ROOT_DIR/resources/patch/increase-vsock-rx-buffer.patch
+
     # Concatenate all config files into one. olddefconfig will then resolve
     # as needed. Later values override earlier ones.
     cat "$@" >.config

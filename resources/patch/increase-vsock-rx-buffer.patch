@@ -1,0 +1,11 @@
+--- a/include/linux/virtio_vsock.h
++++ b/include/linux/virtio_vsock.h
+@@ -110,7 +110,7 @@
+ 	return (size_t)(skb_end_pointer(skb) - skb->head);
+ }
+ 
+-#define VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE	(1024 * 4)
++#define VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE	(1024 * 8)
+ #define VIRTIO_VSOCK_MAX_BUF_SIZE		0xFFFFFFFFUL
+ #define VIRTIO_VSOCK_MAX_PKT_BUF_SIZE		(1024 * 64)
+ 

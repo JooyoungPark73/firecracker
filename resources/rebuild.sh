@@ -71,6 +71,7 @@ mkdir -pv $rootfs/var/lib/dpkg/
 
 # So chrony works
 mkdir -pv $rootfs/var/lib/chrony/
+mkdir -pv $rootfs/var/log/chrony/
 
 # So overlayFS works
 mkdir -pv $rootfs/{overlay/root,overlay/work,mnt,rom}
@@ -184,7 +185,7 @@ function build_al_kernel {
         exit 1
     fi
 
-    patch -p1 < $GIT_ROOT_DIR/resources/patch/increase-vsock-rx-buffer.patch
+    # patch -p1 < $GIT_ROOT_DIR/resources/patch/increase-vsock-rx-buffer.patch
 
     # Concatenate all config files into one. olddefconfig will then resolve
     # as needed. Later values override earlier ones.

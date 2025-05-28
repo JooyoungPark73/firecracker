@@ -33,7 +33,14 @@ apt autoremove
 echo "ubuntu-fc-uvm" > /etc/hostname
 
 # set chrony
-echo 'refclock PHC /dev/ptp0 poll -7 dpoll -7 offset 0' >> /etc/chrony/chrony.conf
+# echo 'refclock PHC /dev/ptp0 poll 0 dpoll 0 offset 0 prefer' >> /etc/chrony/chrony.conf
+cat <<'EOF' > "/etc/chrony/chrony.conf"
+refclock PHC /dev/ptp0 poll 0 dpoll -2 offset 0 prefer
+makestep 1 -1
+leapsectz right/UTC
+driftfile /var/lib/chrony/chrony.drift
+logdir /var/log/chrony
+EOF
 
 passwd -d root
 

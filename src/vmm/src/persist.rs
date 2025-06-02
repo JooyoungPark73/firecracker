@@ -512,7 +512,8 @@ fn guest_memory_from_file(
     mem_state: &GuestMemoryState,
     track_dirty_pages: bool,
 ) -> Result<GuestMemoryMmap, GuestMemoryFromFileError> {
-    let mem_file = File::open(mem_file_path)?;
+    // let mem_file = File::open(mem_file_path)?;
+    let mem_file = std::fs::OpenOptions::new().read(true).write(true).open(mem_file_path)?; // need to open the file in r/w for the file to be mmaped-shared
     let guest_mem = GuestMemoryMmap::snapshot_file(mem_file, mem_state, track_dirty_pages)?;
     Ok(guest_mem)
 }

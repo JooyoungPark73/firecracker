@@ -105,10 +105,12 @@ where
     ) -> Result<Self, MemoryError> {
         Self::create(
             state.regions(),
-            libc::MAP_PRIVATE,
+            libc::MAP_SHARED,
             Some(file),
             track_dirty_pages,
         )
+        // change MAP_PRIVATE to MAP_SHARED to be able to mmap in external process
+        // and see modificaitons
     }
 
     /// Describes GuestMemoryMmap through a GuestMemoryState struct.

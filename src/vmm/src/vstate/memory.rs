@@ -129,7 +129,9 @@ pub fn snapshot_file(
     regions: impl Iterator<Item = (GuestAddress, usize)>,
     track_dirty_pages: bool,
 ) -> Result<Vec<GuestRegionMmap>, MemoryError> {
-    create(regions, libc::MAP_PRIVATE, Some(file), track_dirty_pages)
+    create(regions, libc::MAP_SHARED, Some(file), track_dirty_pages)
+    // change MAP_PRIVATE to MAP_SHARED to be able to mmap in external process
+    // and see modifications
 }
 
 /// Defines the interface for snapshotting memory.

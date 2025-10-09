@@ -203,6 +203,7 @@ function build_al_kernel {
     fi
 
     # patch -p1 < $GIT_ROOT_DIR/resources/patch/increase-vsock-rx-buffer.patch
+    patch -p1 < $GIT_ROOT_DIR/resources/patch/reverse-revert-vmgenid-6.1.patch
 
     # Concatenate all config files into one. olddefconfig will then resolve
     # as needed. Later values override earlier ones.

@@ -35,11 +35,16 @@ echo "ubuntu-fc-uvm" > /etc/hostname
 # set chrony
 # echo 'refclock PHC /dev/ptp0 poll 0 dpoll 0 offset 0 prefer' >> /etc/chrony/chrony.conf
 cat <<'EOF' > "/etc/chrony/chrony.conf"
-refclock PHC /dev/ptp0 poll 0 dpoll -2 offset 0 prefer
+refclock PHC /dev/ptp0 poll -4 offset 0 prefer
 makestep 1 -1
 leapsectz right/UTC
 driftfile /var/lib/chrony/chrony.drift
 logdir /var/log/chrony
+EOF
+
+cat <<'EOF' > "/etc/udev/rules.d/99-vmgenid-resync-clock.rules"
+ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/logger VMGenID udev rule triggered for clock sync"
+ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/systemd-run /bin/systemctl restart chrony.service"
 EOF
 
 passwd -d root

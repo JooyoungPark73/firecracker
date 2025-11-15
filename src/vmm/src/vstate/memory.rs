@@ -48,6 +48,10 @@ pub enum MemoryError {
     MemfdSetLen(std::io::Error),
     /// Total sum of memory regions exceeds largest possible file offset
     OffsetTooLarge,
+    /// Cannot open shared memory file: {0}
+    SharedMemoryOpen(std::io::Error),
+    /// Cannot resize shared memory file: {0}
+    SharedMemoryResize(std::io::Error),
 }
 
 /// Creates a `Vec` of `GuestRegionMmap` with the given configuration
@@ -134,6 +138,46 @@ pub fn snapshot_file(
     // and see modifications
 }
 
+/// Creates a shared memory region backed by a file.
+/// This is used for host-guest communication without relying on snapshot files.
+pub fn shared_memory_region(
+    file_path: &str,
+    guest_addr: GuestAddress,
+    size: usize,
+    track_dirty_pages: bool,
+) -> Result<GuestRegionMmap, MemoryError> {
+    use std::fs::OpenOptions;
+    
+    // Open or create the shared memory file
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(file_path)
+        .map_err(MemoryError::SharedMemoryOpen)?;
+    
+    // Resize the file to the desired size
+    file.set_len(size as u64)
+        .map_err(MemoryError::SharedMemoryResize)?;
+    
+    // Create the memory region with MAP_SHARED
+    let mut builder = MmapRegionBuilder::new_with_bitmap(
+        size,
+        track_dirty_pages.then(|| AtomicBitmap::with_len(size)),
+    )
+    .with_mmap_prot(libc::PROT_READ | libc::PROT_WRITE)
+    .with_mmap_flags(libc::MAP_SHARED | libc::MAP_NORESERVE);
+    
+    let file_offset = FileOffset::new(file, 0);
+    builder = builder.with_file_offset(file_offset);
+    
+    GuestRegionMmap::new(
+        builder.build().map_err(MemoryError::MmapRegionError)?,
+        guest_addr,
+    )
+    .map_err(MemoryError::VmMemoryError)
+}
+
 /// Defines the interface for snapshotting memory.
 pub trait GuestMemoryExtension
 where
@@ -171,6 +215,13 @@ pub struct GuestMemoryRegionState {
     pub base_address: u64,
     /// Region size.
     pub size: usize,
+    /// Whether this is a shared memory region (not to be snapshotted).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_shared_memory: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// Describes guest memory regions and their snapshot file mappings.
@@ -198,6 +249,7 @@ impl GuestMemoryExtension for GuestMemoryMmap {
             guest_memory_state.regions.push(GuestMemoryRegionState {
                 base_address: region.start_addr().0,
                 size: u64_to_usize(region.len()),
+                is_shared_memory: false,
             });
         });
         guest_memory_state

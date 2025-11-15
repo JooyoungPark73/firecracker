@@ -89,6 +89,32 @@ impl From<HugePageConfig> for Option<memfd::HugetlbSize> {
     }
 }
 
+/// Configuration for shared memory between host and guest.
+/// Firecracker mmaps the backing file and exposes it as a separate memory region
+/// to the guest. The guest kernel can expose it via a character device (e.g., /dev/khala-shmem).
+/// The host application mmaps the same file to communicate with the guest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedMemoryConfig {
+    /// Path to the shared memory backing file on the host.
+    pub path: String,
+    /// Size of the shared memory region in MiB.
+    pub size_mib: usize,
+    /// Guest physical address where the shared memory will be mapped.
+    /// If None, Firecracker will choose an address after the main memory region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_addr: Option<u64>,
+}
+
+impl Default for SharedMemoryConfig {
+    fn default() -> Self {
+        Self {
+            path: String::from("/tmp/firecracker-shmem"),
+            size_mib: 16,
+            guest_addr: None, // Auto-assign
+        }
+    }
+}
+
 /// Struct used in PUT `/machine-config` API call.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +141,9 @@ pub struct MachineConfig {
     /// Configures what page size Firecracker should use to back guest memory.
     #[serde(default)]
     pub huge_pages: HugePageConfig,
+    /// Shared memory configuration for host-guest communication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_memory: Option<SharedMemoryConfig>,
     /// GDB socket address.
     #[cfg(feature = "gdb")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,6 +186,7 @@ impl Default for MachineConfig {
             cpu_template: None,
             track_dirty_pages: false,
             huge_pages: HugePageConfig::None,
+            shared_memory: None,
             #[cfg(feature = "gdb")]
             gdb_socket_path: None,
         }
@@ -190,6 +220,9 @@ pub struct MachineConfigUpdate {
     /// Configures what page size Firecracker should use to back guest memory.
     #[serde(default)]
     pub huge_pages: Option<HugePageConfig>,
+    /// Shared memory configuration for host-guest communication.
+    #[serde(default)]
+    pub shared_memory: Option<SharedMemoryConfig>,
     /// GDB socket address.
     #[cfg(feature = "gdb")]
     #[serde(default)]
@@ -214,6 +247,7 @@ impl From<MachineConfig> for MachineConfigUpdate {
             cpu_template: cfg.static_template(),
             track_dirty_pages: Some(cfg.track_dirty_pages),
             huge_pages: Some(cfg.huge_pages),
+            shared_memory: cfg.shared_memory,
             #[cfg(feature = "gdb")]
             gdb_socket_path: cfg.gdb_socket_path,
         }
@@ -281,6 +315,7 @@ impl MachineConfig {
             cpu_template,
             track_dirty_pages: update.track_dirty_pages.unwrap_or(self.track_dirty_pages),
             huge_pages: page_config,
+            shared_memory: update.shared_memory.clone().or_else(|| self.shared_memory.clone()),
             #[cfg(feature = "gdb")]
             gdb_socket_path: update.gdb_socket_path.clone(),
         })

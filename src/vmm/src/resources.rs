@@ -15,6 +15,7 @@ use crate::mmds::data_store::{Mmds, MmdsVersion};
 use crate::mmds::ns::MmdsNetworkStack;
 use crate::utils::mib_to_bytes;
 use crate::utils::net::ipv4addr::is_link_local_valid;
+use crate::vstate::memory::GuestAddress;
 use crate::vmm_config::balloon::*;
 use crate::vmm_config::boot_source::{
     BootConfig, BootSource, BootSourceConfig, BootSourceConfigError,
@@ -488,6 +489,34 @@ impl VmResources {
                 self.machine_config.track_dirty_pages,
                 self.machine_config.huge_pages,
             )
+        }
+    }
+    
+    /// Creates a shared memory region if configured.
+    /// This should be registered separately from main guest memory.
+    pub fn allocate_shared_memory(&self, main_memory_end: u64) -> Result<Option<GuestRegionMmap>, MemoryError> {
+        if let Some(ref shmem_config) = self.machine_config.shared_memory {
+            let shmem_size = mib_to_bytes(shmem_config.size_mib);
+            
+            // Determine guest physical address for shared memory
+            let guest_addr = if let Some(addr) = shmem_config.guest_addr {
+                GuestAddress(addr)
+            } else {
+                // Auto-assign: place after the last memory region, aligned to 2MB
+                let aligned_addr = (main_memory_end + 0x1FFFFF) & !0x1FFFFF;
+                GuestAddress(aligned_addr)
+            };
+            
+            let shmem_region = memory::shared_memory_region(
+                &shmem_config.path,
+                guest_addr,
+                shmem_size,
+                false, // Don't track dirty pages for shared memory
+            )?;
+            
+            Ok(Some(shmem_region))
+        } else {
+            Ok(None)
         }
     }
 }

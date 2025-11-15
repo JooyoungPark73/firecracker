@@ -15,6 +15,7 @@ use userfaultfd::Uffd;
 use utils::time::TimestampUs;
 #[cfg(target_arch = "aarch64")]
 use vm_memory::GuestAddress;
+use vm_memory::{GuestMemory, GuestMemoryRegion};
 
 #[cfg(target_arch = "aarch64")]
 use crate::Vcpu;
@@ -169,6 +170,28 @@ pub fn build_microvm_for_boot(
     let mut vm = Vm::new(&kvm)?;
     let (mut vcpus, vcpus_exit_evt) = vm.create_vcpus(vm_resources.machine_config.vcpu_count)?;
     vm.register_memory_regions(guest_memory)?;
+    
+    // Register shared memory as a separate KVM memory slot if configured
+    let main_memory_end = vm.guest_memory().iter()
+        .map(|r| r.start_addr().0 + r.len())
+        .max()
+        .unwrap_or(0);
+    let shared_memory_region = vm_resources.allocate_shared_memory(main_memory_end)
+        .map_err(StartMicrovmError::GuestMemory)?;
+    let shmem_info = if let Some(shmem_region) = shared_memory_region {
+        let addr = shmem_region.start_addr().0;
+        let size = shmem_region.len();
+        vm.register_memory_region(shmem_region)?;
+        Some((addr, size))
+    } else {
+        None
+    };
+    
+    // Add shared memory kernel parameter if configured
+    if let Some((addr, size)) = shmem_info {
+        let shmem_param = format!("khala_shmem={:#x},{:#x}", addr, size);
+        boot_cmdline.insert_str(&shmem_param)?;
+    }
 
     let mut device_manager = DeviceManager::new(event_manager, &vcpus_exit_evt, &vm)?;
 
@@ -416,6 +439,18 @@ pub fn build_microvm_from_snapshot(
 
     vm.register_memory_regions(guest_memory)
         .map_err(StartMicrovmError::Vm)?;
+    
+    // Register shared memory as a separate KVM memory slot if configured
+    let main_memory_end = vm.guest_memory().iter()
+        .map(|r| r.start_addr().0 + r.len())
+        .max()
+        .unwrap_or(0);
+    let shared_memory_region = vm_resources.allocate_shared_memory(main_memory_end)
+        .map_err(StartMicrovmError::GuestMemory)?;
+    if let Some(shmem_region) = shared_memory_region {
+        vm.register_memory_region(shmem_region)
+            .map_err(StartMicrovmError::Vm)?;
+    }
 
     #[cfg(target_arch = "x86_64")]
     {

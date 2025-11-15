@@ -43,7 +43,8 @@ logdir /var/log/chrony
 EOF
 
 cat <<'EOF' > "/etc/udev/rules.d/99-vmgenid-resync-clock.rules"
-ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/logger VMGenID udev rule triggered for clock sync"
+ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/logger VMGenID udev rule triggered for clock sync and tcp connection reset"
+ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/systemd-run /usr/bin/ss -K -t state established"
 ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/systemd-run /bin/systemctl restart chrony.service"
 EOF
 

@@ -37,7 +37,7 @@ new file mode 100644
 index 000000000000..a1b2c3d4e5f6
 --- /dev/null
 +++ b/drivers/char/khala_shmem.c
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,228 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Khala Shared Memory Character Device Driver
@@ -107,6 +107,31 @@ index 000000000000..a1b2c3d4e5f6
 +	return 0;
 +}
 +
++static loff_t khala_llseek(struct file *filp, loff_t offset, int whence)
++{
++	loff_t newpos;
++
++	switch (whence) {
++	case SEEK_SET:
++		newpos = offset;
++		break;
++	case SEEK_CUR:
++		newpos = filp->f_pos + offset;
++		break;
++	case SEEK_END:
++		newpos = shmem_size + offset;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if (newpos < 0 || newpos > shmem_size)
++		return -EINVAL;
++
++	filp->f_pos = newpos;
++	return newpos;
++}
++
 +static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 +{
 +	unsigned long size = vma->vm_end - vma->vm_start;
@@ -157,6 +182,7 @@ index 000000000000..a1b2c3d4e5f6
 +	.open = khala_open,
 +	.release = khala_release,
 +	.mmap = khala_mmap,
++	.llseek = khala_llseek,
 +};
 +
 +static int __init khala_shmem_init(void)

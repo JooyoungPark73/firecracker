@@ -699,6 +699,7 @@ mod tests {
             regions: vec![GuestMemoryRegionState {
                 base_address: 0,
                 size: 0x20000,
+                is_shared_memory: false,
             }],
         };
 

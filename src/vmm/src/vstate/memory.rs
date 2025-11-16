@@ -541,10 +541,12 @@ mod tests {
                 GuestMemoryRegionState {
                     base_address: 0,
                     size: page_size,
+                    is_shared_memory: false,
                 },
                 GuestMemoryRegionState {
-                    base_address: page_size as u64 * 2,
+                    base_address: (page_size * 2) as u64,
                     size: page_size,
+                    is_shared_memory: false,
                 },
             ],
         };
@@ -567,10 +569,12 @@ mod tests {
                 GuestMemoryRegionState {
                     base_address: 0,
                     size: page_size * 3,
+                    is_shared_memory: false,
                 },
                 GuestMemoryRegionState {
                     base_address: page_size as u64 * 4,
                     size: page_size * 3,
+                    is_shared_memory: false,
                 },
             ],
         };

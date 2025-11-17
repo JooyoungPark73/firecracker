@@ -148,17 +148,25 @@ pub fn shared_memory_region(
 ) -> Result<GuestRegionMmap, MemoryError> {
     use std::fs::OpenOptions;
     
-    // Open or create the shared memory file
+    // Open the shared memory file (must already exist)
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
         .open(file_path)
         .map_err(MemoryError::SharedMemoryOpen)?;
     
-    // Resize the file to the desired size
-    file.set_len(size as u64)
-        .map_err(MemoryError::SharedMemoryResize)?;
+    // Verify the file is the correct size
+    let current_len = file.metadata()
+        .map_err(MemoryError::SharedMemoryOpen)?
+        .len();
+    if current_len != size as u64 {
+        return Err(MemoryError::SharedMemoryResize(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Shared memory file size mismatch: expected {}, found {}", size, current_len)
+            )
+        ));
+    }
     
     // Create the memory region with MAP_SHARED
     let mut builder = MmapRegionBuilder::new_with_bitmap(
@@ -190,13 +198,16 @@ where
     fn mark_dirty(&self, addr: GuestAddress, len: usize);
 
     /// Dumps all contents of GuestMemoryMmap to a writer.
-    fn dump<T: WriteVolatile>(&self, writer: &mut T) -> Result<(), MemoryError>;
+    /// If `state` is provided, only regions with `snapshot: true` will be dumped.
+    fn dump<T: WriteVolatile>(&self, writer: &mut T, state: Option<&GuestMemoryState>) -> Result<(), MemoryError>;
 
     /// Dumps all pages of GuestMemoryMmap present in `dirty_bitmap` to a writer.
+    /// If `state` is provided, only regions with `snapshot: true` will be dumped.
     fn dump_dirty<T: WriteVolatile + std::io::Seek>(
         &self,
         writer: &mut T,
         dirty_bitmap: &DirtyBitmap,
+        state: Option<&GuestMemoryState>,
     ) -> Result<(), MemoryError>;
 
     /// Resets all the memory region bitmaps
@@ -215,13 +226,13 @@ pub struct GuestMemoryRegionState {
     pub base_address: u64,
     /// Region size.
     pub size: usize,
-    /// Whether this is a shared memory region (not to be snapshotted).
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_shared_memory: bool,
+    /// Whether this region should be included in snapshots.
+    #[serde(default = "default_snapshot_true")]
+    pub snapshot: bool,
 }
 
-fn is_false(b: &bool) -> bool {
-    !b
+fn default_snapshot_true() -> bool {
+    true
 }
 
 /// Describes guest memory regions and their snapshot file mappings.
@@ -249,7 +260,7 @@ impl GuestMemoryExtension for GuestMemoryMmap {
             guest_memory_state.regions.push(GuestMemoryRegionState {
                 base_address: region.start_addr().0,
                 size: u64_to_usize(region.len()),
-                is_shared_memory: false,
+                snapshot: true, // By default, all regions are snapshotted
             });
         });
         guest_memory_state
@@ -266,9 +277,14 @@ impl GuestMemoryExtension for GuestMemoryMmap {
     }
 
     /// Dumps all contents of GuestMemoryMmap to a writer.
-    fn dump<T: WriteVolatile>(&self, writer: &mut T) -> Result<(), MemoryError> {
+    fn dump<T: WriteVolatile>(&self, writer: &mut T, state: Option<&GuestMemoryState>) -> Result<(), MemoryError> {
         self.iter()
-            .try_for_each(|region| Ok(writer.write_all_volatile(&region.as_volatile_slice()?)?))
+            .enumerate()
+            .filter(|(idx, _)| {
+                // If state is provided, check if this region should be snapshotted
+                state.map_or(true, |s| s.regions.get(*idx).map_or(true, |r| r.snapshot))
+            })
+            .try_for_each(|(_, region)| Ok(writer.write_all_volatile(&region.as_volatile_slice()?)?))
             .map_err(MemoryError::WriteMemory)
     }
 
@@ -277,11 +293,15 @@ impl GuestMemoryExtension for GuestMemoryMmap {
         &self,
         writer: &mut T,
         dirty_bitmap: &DirtyBitmap,
+        state: Option<&GuestMemoryState>,
     ) -> Result<(), MemoryError> {
         let mut writer_offset = 0;
         let page_size = get_page_size().map_err(MemoryError::PageSize)?;
 
-        let write_result = self.iter().zip(0..).try_for_each(|(region, slot)| {
+        let write_result = self.iter().zip(0..).filter(|(_, slot)| {
+            // If state is provided, check if this region should be snapshotted
+            state.map_or(true, |s| s.regions.get(*slot as usize).map_or(true, |r| r.snapshot))
+        }).try_for_each(|(region, slot)| {
             let kvm_bitmap = dirty_bitmap.get(&slot).unwrap();
             let firecracker_bitmap = region.bitmap();
             let mut write_size = 0;
@@ -541,12 +561,12 @@ mod tests {
                 GuestMemoryRegionState {
                     base_address: 0,
                     size: page_size,
-                    is_shared_memory: false,
+                    snapshot: true,
                 },
                 GuestMemoryRegionState {
                     base_address: (page_size * 2) as u64,
                     size: page_size,
-                    is_shared_memory: false,
+                    snapshot: true,
                 },
             ],
         };
@@ -569,12 +589,12 @@ mod tests {
                 GuestMemoryRegionState {
                     base_address: 0,
                     size: page_size * 3,
-                    is_shared_memory: false,
+                    snapshot: true,
                 },
                 GuestMemoryRegionState {
-                    base_address: page_size as u64 * 4,
+                    base_address: (page_size * 4) as u64,
                     size: page_size * 3,
-                    is_shared_memory: false,
+                    snapshot: true,
                 },
             ],
         };
@@ -618,7 +638,7 @@ mod tests {
 
         // dump the full memory.
         let mut memory_file = TempFile::new().unwrap().into_file();
-        guest_memory.dump(&mut memory_file).unwrap();
+        guest_memory.dump(&mut memory_file, None).unwrap();
 
         let restored_guest_memory = GuestMemoryMmap::from_regions(
             snapshot_file(memory_file, memory_state.regions(), false).unwrap(),
@@ -679,7 +699,7 @@ mod tests {
         dirty_bitmap.insert(1, vec![0b10]);
 
         let mut file = TempFile::new().unwrap().into_file();
-        guest_memory.dump_dirty(&mut file, &dirty_bitmap).unwrap();
+        guest_memory.dump_dirty(&mut file, &dirty_bitmap, None).unwrap();
 
         // We can restore from this because this is the first dirty dump.
         let restored_guest_memory = GuestMemoryMmap::from_regions(
@@ -713,7 +733,7 @@ mod tests {
             .write(&twos, GuestAddress(page_size as u64))
             .unwrap();
 
-        guest_memory.dump_dirty(&mut reader, &dirty_bitmap).unwrap();
+        guest_memory.dump_dirty(&mut reader, &dirty_bitmap, None).unwrap();
 
         // Check that only the dirty regions are dumped.
         let mut diff_file_content = Vec::new();

@@ -40,7 +40,7 @@ use crate::vstate::memory::{
 };
 use crate::vstate::resources::ResourceAllocator;
 use crate::vstate::vcpu::VcpuError;
-use crate::{DirtyBitmap, Vcpu, mem_size_mib};
+use crate::{DirtyBitmap, Vcpu};
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 /// Errors related with Firecracker interrupts
@@ -455,6 +455,7 @@ impl Vm {
         &self,
         mem_file_path: &Path,
         snapshot_type: SnapshotType,
+        shared_memory_addr: Option<u64>,
     ) -> Result<(), CreateSnapshotError> {
         use self::CreateSnapshotError::*;
 
@@ -468,9 +469,32 @@ impl Vm {
             .open(mem_file_path)
             .map_err(|err| MemoryBackingFile("open", err))?;
 
-        // Determine what size our total memory area is.
-        let mem_size_mib = mem_size_mib(self.guest_memory());
-        let expected_size = mem_size_mib * 1024 * 1024;
+        // Get memory state and mark shared memory region as non-snapshot
+        let mut memory_state = self.guest_memory().describe();
+        
+        info!("Before filtering - regions: {:?}", memory_state.regions.iter().map(|r| (r.base_address, r.size, r.snapshot)).collect::<Vec<_>>());
+        info!("Shared memory addr to exclude: {:?}", shared_memory_addr);
+        
+        // If shared memory is configured, mark that region as non-snapshot
+        if let Some(shmem_addr) = shared_memory_addr {
+            for region in &mut memory_state.regions {
+                if region.base_address == shmem_addr {
+                    info!("Marking region at 0x{:x} as non-snapshot", shmem_addr);
+                    region.snapshot = false;
+                    break;
+                }
+            }
+        }
+
+        info!("After filtering - regions: {:?}", memory_state.regions.iter().map(|r| (r.base_address, r.size, r.snapshot)).collect::<Vec<_>>());
+
+        // Calculate the expected size based only on regions that will be snapshotted
+        let expected_size: u64 = memory_state.regions.iter()
+            .filter(|r| r.snapshot)
+            .map(|r| r.size as u64)
+            .sum();
+        
+        info!("Expected snapshot file size: {} bytes ({} MiB)", expected_size, expected_size / (1024 * 1024));
 
         if file_existed {
             let file_size = file
@@ -491,17 +515,17 @@ impl Vm {
             }
         }
 
-        // Set the length of the file to the full size of the memory area.
+        // Set the length of the file to the size of regions that will be snapshotted
         file.set_len(expected_size)
             .map_err(|e| MemoryBackingFile("set_length", e))?;
-
+        
         match snapshot_type {
             SnapshotType::Diff => {
                 let dirty_bitmap = self.get_dirty_bitmap()?;
-                self.guest_memory().dump_dirty(&mut file, &dirty_bitmap)?;
+                self.guest_memory().dump_dirty(&mut file, &dirty_bitmap, Some(&memory_state))?;
             }
             SnapshotType::Full => {
-                self.guest_memory().dump(&mut file)?;
+                self.guest_memory().dump(&mut file, Some(&memory_state))?;
                 self.reset_dirty_bitmap();
                 self.guest_memory().reset_dirty();
             }

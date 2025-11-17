@@ -101,18 +101,7 @@ pub struct SharedMemoryConfig {
     pub size_mib: usize,
     /// Guest physical address where the shared memory will be mapped.
     /// If None, Firecracker will choose an address after the main memory region.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_addr: Option<u64>,
-}
-
-impl Default for SharedMemoryConfig {
-    fn default() -> Self {
-        Self {
-            path: String::from("/tmp/firecracker-shmem"),
-            size_mib: 16,
-            guest_addr: None, // Auto-assign
-        }
-    }
 }
 
 /// Struct used in PUT `/machine-config` API call.

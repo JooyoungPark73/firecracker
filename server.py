@@ -13,8 +13,6 @@ OFFSET_MEM = 0x0
 
 BUF_SIZE = 1024 * 2
 
-CHUNK_SIZE = 40 * 1024 * 1024  # 40MB
-
 def read_vsock_message(conn):
     # Read the 4-byte length prefix
     raw_len = b''
@@ -100,9 +98,9 @@ def main_mmap(mmap_path='/tmp/firecracker-shmem', mmap_size=16*1024*1024):
             for _ in range(4):
                 msg = read_mmap_message(conn, mm)
                 if msg:
-                    msg = b"Response From Host"
+                    msg_resp = msg + b"Response From Host"
                     start_time = time.time_ns() // 1000  # Convert nanoseconds to microseconds
-                    write_mmap_message(conn, mm, msg)
+                    write_mmap_message(conn, mm, msg_resp)
                     end_time = time.time_ns() // 1000  # Convert nanoseconds to microseconds
                     print(f"Time taken host->guest: {end_time - start_time} microseconds")
             conn.close()
@@ -150,23 +148,6 @@ def write_message(conn, data):
     length = len(data)
     conn.sendall(struct.pack('!I', length))
     conn.sendall(data) 
-
-def write_large_mmap_message(sock, mm, data):
-    # Split data into chunks and send via mmap + socket
-    total_chunks = (len(data) + CHUNK_SIZE - 1) // CHUNK_SIZE
-    
-    for i in range(total_chunks):
-        start = i * CHUNK_SIZE
-        end = min(start + CHUNK_SIZE, len(data))
-        chunk = data[start:end]
-        
-        # Write chunk to mmap (overwrite previous chunk)
-        mm[:len(chunk)] = chunk
-        
-        # Send chunk length
-        sock.sendall(struct.pack('!I', len(chunk)))
-    # Signal end with zero-length chunk
-    sock.sendall(struct.pack('!I', 0)) 
 
 if __name__ == "__main__":
     # main()

@@ -33,11 +33,11 @@ use crate::snapshot::Snapshot;
 use crate::utils::u64_to_usize;
 use crate::vmm_config::boot_source::BootSourceConfig;
 use crate::vmm_config::instance_info::InstanceInfo;
-use crate::vmm_config::machine_config::{HugePageConfig, MachineConfigError, MachineConfigUpdate};
+use crate::vmm_config::machine_config::{HugePageConfig, MachineConfigError, MachineConfigUpdate, SharedMemoryConfig};
 use crate::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotParams, MemBackendType};
 use crate::vstate::kvm::KvmState;
 use crate::vstate::memory;
-use crate::vstate::memory::{GuestMemoryState, GuestRegionMmap, MemoryError};
+use crate::vstate::memory::{GuestAddress, GuestMemory, GuestMemoryRegion, GuestMemoryState, GuestRegionMmap, MemoryError};
 use crate::vstate::vcpu::{VcpuSendEventError, VcpuState};
 use crate::vstate::vm::{VmError, VmState};
 use crate::{EventManager, Vmm, vstate};
@@ -55,6 +55,8 @@ pub struct VmInfo {
     pub boot_source: BootSourceConfig,
     /// Huge page configuration
     pub huge_pages: HugePageConfig,
+    /// Shared memory configuration
+    pub shared_memory: Option<SharedMemoryConfig>,
 }
 
 impl From<&VmResources> for VmInfo {
@@ -65,6 +67,7 @@ impl From<&VmResources> for VmInfo {
             cpu_template: StaticCpuTemplate::from(&value.machine_config.cpu_template),
             boot_source: value.boot_source.config.clone(),
             huge_pages: value.machine_config.huge_pages,
+            shared_memory: value.machine_config.shared_memory.clone(),
         }
     }
 }
@@ -154,14 +157,44 @@ pub fn create_snapshot(
     vm_info: &VmInfo,
     params: &CreateSnapshotParams,
 ) -> Result<(), CreateSnapshotError> {
-    let microvm_state = vmm
+    let mut microvm_state = vmm
         .save_state(vm_info)
         .map_err(CreateSnapshotError::MicrovmState)?;
 
-    snapshot_state_to_file(&microvm_state, &params.snapshot_path)?;
+    // Get shared memory address if configured
+    // If guest_addr was not explicitly set, we need to find it by looking at memory regions
+    let shared_memory_addr = if let Some(ref shmem_config) = vm_info.shared_memory {
+        // First try the explicitly configured address
+        shmem_config.guest_addr.or_else(|| {
+            // If not set, find the shared memory region by looking for the last region
+            // (shared memory is always registered last)
+            let regions: Vec<_> = vmm.vm.guest_memory().iter().collect();
+            if regions.len() > 1 {
+                // The last region should be shared memory
+                let last_region = regions.last().unwrap();
+                Some(last_region.start_addr().0)
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
 
+    // Mark shared memory region as non-snapshot in the memory state that will be saved
+    if let Some(shmem_addr) = shared_memory_addr {
+        for region in &mut microvm_state.vm_state.memory.regions {
+            if region.base_address == shmem_addr {
+                region.snapshot = false;
+                break;
+            }
+        }
+    }
+
+    snapshot_state_to_file(&microvm_state, &params.snapshot_path)?;
+    
     vmm.vm
-        .snapshot_memory_to_file(&params.mem_file_path, params.snapshot_type)?;
+        .snapshot_memory_to_file(&params.mem_file_path, params.snapshot_type, shared_memory_addr)?;
 
     // We need to mark queues as dirty again for all activated devices. The reason we
     // do it here is that we don't mark pages as dirty during runtime
@@ -356,7 +389,7 @@ pub fn restore_from_snapshot(
             cpu_template: Some(microvm_state.vm_info.cpu_template),
             track_dirty_pages: Some(track_dirty_pages),
             huge_pages: Some(microvm_state.vm_info.huge_pages),
-            shared_memory: None,
+            shared_memory: microvm_state.vm_info.shared_memory.clone(),
             #[cfg(feature = "gdb")]
             gdb_socket_path: None,
         })
@@ -447,7 +480,12 @@ fn guest_memory_from_file(
 ) -> Result<Vec<GuestRegionMmap>, GuestMemoryFromFileError> {
     // let mem_file = File::open(mem_file_path)?;
     let mem_file = std::fs::OpenOptions::new().read(true).write(true).open(mem_file_path)?; // need to open the file in r/w for the file to be mmaped-shared
-    let guest_mem = memory::snapshot_file(mem_file, mem_state.regions(), track_dirty_pages)?;
+    // Only restore regions that were snapshotted (snapshot == true)
+    let snapshot_regions = mem_state.regions
+        .iter()
+        .filter(|r| r.snapshot)
+        .map(|r| (GuestAddress(r.base_address), r.size));
+    let guest_mem = memory::snapshot_file(mem_file, snapshot_regions, track_dirty_pages)?;
     Ok(guest_mem)
 }
 
@@ -505,7 +543,12 @@ fn create_guest_memory(
     track_dirty_pages: bool,
     huge_pages: HugePageConfig,
 ) -> Result<(Vec<GuestRegionMmap>, Vec<GuestRegionUffdMapping>), GuestMemoryFromUffdError> {
-    let guest_memory = memory::anonymous(mem_state.regions(), track_dirty_pages, huge_pages)?;
+    // Only restore regions that were snapshotted (snapshot == true)
+    let snapshot_regions = mem_state.regions
+        .iter()
+        .filter(|r| r.snapshot)
+        .map(|r| (GuestAddress(r.base_address), r.size));
+    let guest_memory = memory::anonymous(snapshot_regions, track_dirty_pages, huge_pages)?;
     let mut backend_mappings = Vec::with_capacity(guest_memory.len());
     let mut offset = 0;
     for mem_region in guest_memory.iter() {
@@ -699,7 +742,7 @@ mod tests {
             regions: vec![GuestMemoryRegionState {
                 base_address: 0,
                 size: 0x20000,
-                is_shared_memory: false,
+                snapshot: true,
             }],
         };
 

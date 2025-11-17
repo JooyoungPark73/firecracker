@@ -191,6 +191,10 @@ pub fn build_microvm_for_boot(
     if let Some((addr, size)) = shmem_info {
         let shmem_param = format!("khala_shmem={:#x},{:#x}", addr, size);
         boot_cmdline.insert_str(&shmem_param)?;
+        
+        // Reserve the shared memory region so kernel doesn't use it for regular allocations
+        let reserve_param = format!("memmap={:#x}${:#x} nopat", size, addr);
+        boot_cmdline.insert_str(&reserve_param)?;
     }
 
     let mut device_manager = DeviceManager::new(event_manager, &vcpus_exit_evt, &vm)?;

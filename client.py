@@ -56,7 +56,7 @@ with open(memPath, 'r+b') as f:
         start_time = time.time_ns() // 1000 
         msg = read_mmap_message(s, mm)
         if msg:
-            print(f"Received message: {msg.decode()}")
+            print(f"Received message: {msg.decode()}\n")
         else:
             print("No message received")
         end_time = time.time_ns() // 1000 

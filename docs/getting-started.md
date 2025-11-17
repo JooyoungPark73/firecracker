@@ -125,7 +125,7 @@ cp -v id_rsa.pub squashfs-root/root/.ssh/authorized_keys
 mv -v id_rsa ./ubuntu-$ubuntu_version.id_rsa
 # create ext4 filesystem image
 sudo chown -R root:root squashfs-root
-truncate -s 400M ubuntu-$ubuntu_version.ext4
+truncate -s 4096M ubuntu-$ubuntu_version.ext4
 sudo mkfs.ext4 -d squashfs-root -F ubuntu-$ubuntu_version.ext4
 
 # Verify everything was correctly set up and print versions
@@ -208,7 +208,7 @@ In a new terminal (do not close the 1st one):
 
 ```bash
 TAP_DEV="tap0"
-TAP_IP="172.16.0.1"
+TAP_IP="10.10.1.1"
 MASK_SHORT="/30"
 
 # Setup network interface
@@ -246,7 +246,24 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
     }" \
     "http://localhost/logger"
 
-KERNEL="./$(ls vmlinux* | tail -1)"
+# Create shared memory file
+sudo rm /tmp/firecracker-shmem
+sudo dd if=/dev/zero of=/tmp/firecracker-shmem bs=1M count=16
+sudo chmod 666 /tmp/firecracker-shmem
+
+# Set machine configuration with shared memory
+sudo curl -X PUT --unix-socket "${API_SOCKET}" \
+    --data "{
+        \"vcpu_count\": 2,
+        \"mem_size_mib\": 1024,
+        \"shared_memory\": {
+            \"path\": \"/tmp/firecracker-shmem\",
+            \"size_mib\": 16
+        }
+    }" \
+    "http://localhost/machine-config"
+
+KERNEL="/users/nehalem/firecracker/resources/x86_64/vmlinux-6.1.155"
 KERNEL_BOOT_ARGS="console=ttyS0 reboot=k panic=1"
 
 ARCH=$(uname -m)
@@ -263,7 +280,7 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
     }" \
     "http://localhost/boot-source"
 
-ROOTFS="./$(ls *.ext4 | tail -1)"
+ROOTFS="/users/nehalem/firecracker/resources/x86_64/ubuntu-unsquash.ext4"
 
 # Set rootfs
 sudo curl -X PUT --unix-socket "${API_SOCKET}" \
@@ -278,7 +295,7 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
 # The IP address of a guest is derived from its MAC address with
 # `fcnet-setup.sh`, this has been pre-configured in the guest rootfs. It is
 # important that `TAP_IP` and `FC_MAC` match this.
-FC_MAC="06:00:AC:10:00:02"
+FC_MAC="06:00:0A:0A:01:02"
 
 # Set network interface
 sudo curl -X PUT --unix-socket "${API_SOCKET}" \
@@ -307,7 +324,7 @@ sleep 2s
 KEY_NAME=./$(ls *.id_rsa | tail -1)
 
 # Setup internet access in the guest
-ssh -i $KEY_NAME root@172.16.0.2  "ip route add default via 172.16.0.1 dev eth0"
+ssh -i $KEY_NAME root@172.16.0.2  "ip route add default via 10.10.1.1 dev eth0"
 
 # Setup DNS resolution in the guest
 ssh -i $KEY_NAME root@172.16.0.2  "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"

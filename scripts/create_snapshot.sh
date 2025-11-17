@@ -1,3 +1,6 @@
+API_SOCKET="/tmp/firecracker.socket"
+
+
 sudo curl --unix-socket "${API_SOCKET}" -i \
 -X PATCH 'http://localhost/vm' \
     -H 'Accept: application/json' \

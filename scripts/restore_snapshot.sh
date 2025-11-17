@@ -1,3 +1,6 @@
+API_SOCKET="/tmp/firecracker.socket"
+
+
 sudo curl --unix-socket "${API_SOCKET}" -i \
     -X PUT 'http://localhost/snapshot/load' \
     -H  'Accept: application/json' \

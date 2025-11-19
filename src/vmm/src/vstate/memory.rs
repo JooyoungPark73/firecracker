@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 pub use vm_memory::bitmap::{AtomicBitmap, BS, Bitmap, BitmapSlice};
 pub use vm_memory::mmap::MmapRegionBuilder;
@@ -147,25 +148,52 @@ pub fn shared_memory_region(
     track_dirty_pages: bool,
 ) -> Result<GuestRegionMmap, MemoryError> {
     use std::fs::OpenOptions;
+    use std::os::unix::fs::FileExt;
     
-    // Open the shared memory file (must already exist)
+    // Create or open the shared memory file
     let file = OpenOptions::new()
         .read(true)
         .write(true)
+        .create(true)
         .open(file_path)
         .map_err(MemoryError::SharedMemoryOpen)?;
     
-    // Verify the file is the correct size
+    // Check current file size
     let current_len = file.metadata()
         .map_err(MemoryError::SharedMemoryOpen)?
         .len();
+    
+    // Only resize and zero if the file is wrong size or empty
+    // This allows pre-filled files to work while ensuring clean state for new files
     if current_len != size as u64 {
-        return Err(MemoryError::SharedMemoryResize(
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Shared memory file size mismatch: expected {}, found {}", size, current_len)
-            )
-        ));
+        info!(
+            "Shared memory file size mismatch: current={}, expected={}. Resizing and zeroing.",
+            current_len, size
+        );
+        
+        // Resize to correct size
+        file.set_len(size as u64)
+            .map_err(MemoryError::SharedMemoryResize)?;
+        
+        // Zero out the entire file for stability
+        // This prevents stale data from previous runs causing issues
+        const ZERO_CHUNK: usize = 2 * 1024 * 1024; // 2MB chunks
+        let zero_buf = vec![0u8; ZERO_CHUNK];
+        let mut offset = 0;
+        while offset < size {
+            let chunk_size = std::cmp::min(ZERO_CHUNK, size - offset);
+            file.write_all_at(&zero_buf[..chunk_size], offset as u64)
+                .map_err(MemoryError::SharedMemoryOpen)?;
+            offset += chunk_size;
+        }
+        
+        // Sync to ensure file is fully initialized before mmap
+        file.sync_all().map_err(MemoryError::SharedMemoryOpen)?;
+    } else {
+        debug!(
+            "Shared memory file already correct size ({}), reusing existing file",
+            size
+        );
     }
     
     // Create the memory region with MAP_SHARED

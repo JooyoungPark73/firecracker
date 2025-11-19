@@ -163,9 +163,9 @@ pub fn create_snapshot(
 
     // Get shared memory address if configured
     // If guest_addr was not explicitly set, we need to find it by looking at memory regions
-    let shared_memory_addr = if let Some(ref shmem_config) = vm_info.shared_memory {
+    let shared_memory_addr = if let Some(ref mut shmem_config) = microvm_state.vm_info.shared_memory {
         // First try the explicitly configured address
-        shmem_config.guest_addr.or_else(|| {
+        let addr = shmem_config.guest_addr.or_else(|| {
             // If not set, find the shared memory region by looking for the last region
             // (shared memory is always registered last)
             let regions: Vec<_> = vmm.vm.guest_memory().iter().collect();
@@ -176,7 +176,15 @@ pub fn create_snapshot(
             } else {
                 None
             }
-        })
+        });
+        
+        // CRITICAL: Save the detected address back to the config
+        // This ensures the shared memory is restored to the exact same guest physical address
+        if addr.is_some() && shmem_config.guest_addr.is_none() {
+            shmem_config.guest_addr = addr;
+        }
+        
+        addr
     } else {
         None
     };

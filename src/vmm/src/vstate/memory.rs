@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 pub use vm_memory::bitmap::{AtomicBitmap, BS, Bitmap, BitmapSlice};
 pub use vm_memory::mmap::MmapRegionBuilder;
@@ -147,25 +148,40 @@ pub fn shared_memory_region(
     track_dirty_pages: bool,
 ) -> Result<GuestRegionMmap, MemoryError> {
     use std::fs::OpenOptions;
+    use std::os::unix::fs::FileExt;
     
-    // Open the shared memory file (must already exist)
+    // Create or open the shared memory file
     let file = OpenOptions::new()
         .read(true)
         .write(true)
+        .create(true)
         .open(file_path)
         .map_err(MemoryError::SharedMemoryOpen)?;
     
-    // Verify the file is the correct size
+    // Check current file size
     let current_len = file.metadata()
         .map_err(MemoryError::SharedMemoryOpen)?
         .len();
+    
+    // If the file size doesn't match the expected size, resize it
+    // but DO NOT zero it out - this allows pre-placed payloads to be preserved
     if current_len != size as u64 {
-        return Err(MemoryError::SharedMemoryResize(
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Shared memory file size mismatch: expected {}, found {}", size, current_len)
-            )
-        ));
+        info!(
+            "Shared memory file size mismatch: current={}, expected={}. Resizing without zeroing to preserve payload.",
+            current_len, size
+        );
+        
+        // Resize to correct size
+        file.set_len(size as u64)
+            .map_err(MemoryError::SharedMemoryResize)?;
+        
+        // Sync to ensure file is fully initialized before mmap
+        file.sync_all().map_err(MemoryError::SharedMemoryOpen)?;
+    } else {
+        debug!(
+            "Shared memory file already correct size ({}), reusing existing file",
+            size
+        );
     }
     
     // Create the memory region with MAP_SHARED

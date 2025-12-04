@@ -1255,6 +1255,13 @@ definitions:
         type: boolean
         description:
           Flag to map backing file in read-only mode.
+      raw_memory:
+        type: boolean
+        description:
+          Flag to enable raw memory mode. When true, bypasses the NVDIMM subsystem and exposes
+          the physical memory region directly to the guest via khala-shmem driver for zero-copy
+          host-guest communication. The device will use a fixed physical address (1TB) to ensure
+          consistent addressing across snapshot/restore operations.
 
   Error:
     type: object

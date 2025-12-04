@@ -114,11 +114,11 @@ static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 	}
 
 	/*
-	 * Use write-combining for better performance
-	 * This allows writes to be buffered and improves throughput
-	 * Alternative: pgprot_noncached() for strict ordering
+	 * Use default page protection (write-back caching) to match KVM's memory region
+	 * KVM doesn't support write-combining for guest memory regions, so we must use
+	 * the same cache mode to avoid PAT conflicts
+	 * Note: vma->vm_page_prot is already set to write-back by default
 	 */
-	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 
 	/* Map the physical memory region using vm_iomap_memory */
 	ret = vm_iomap_memory(vma, phys, size);

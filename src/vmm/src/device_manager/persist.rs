@@ -329,16 +329,13 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                 }
                 virtio_ids::VIRTIO_ID_PMEM => {
                     let pmem = locked_device.as_mut_any().downcast_mut::<Pmem>().unwrap();
-                    // Skip raw_memory pmem devices - they will be recreated from config on restore
-                    if !pmem.config.raw_memory {
-                        let device_state = pmem.save();
-                        states.pmem_devices.push(VirtioDeviceState {
-                            device_id,
-                            device_state,
-                            transport_state,
-                            device_info,
-                        });
-                    }
+                    let device_state = pmem.save();
+                    states.pmem_devices.push(VirtioDeviceState {
+                        device_id,
+                        device_state,
+                        transport_state,
+                        device_info,
+                    });
                 }
                 virtio_ids::VIRTIO_ID_MEM => {
                     let mem = locked_device

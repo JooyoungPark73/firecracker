@@ -509,45 +509,6 @@ pub fn build_microvm_from_snapshot(
     let mut device_manager =
         DeviceManager::restore(device_ctor_args, &microvm_state.device_states)?;
 
-    // Attach raw_memory pmem devices that were excluded from snapshot
-    // These devices maintain their own backing storage and need to be recreated
-    for pmem_device in vm_resources.pmem.devices.iter() {
-        let mut locked_dev = pmem_device.lock().expect("Poisoned lock");
-        if locked_dev.config.raw_memory {
-            eprintln!("[RESTORE] Processing raw_memory pmem device");
-            eprintln!("[RESTORE] Before re-mmap: mmap_ptr={:#x}, file_len={}, config_space.start={:#x}, config_space.size={:#x}",
-                locked_dev.mmap_ptr, locked_dev.file_len, locked_dev.config_space.start, locked_dev.config_space.size);
-            
-            // Re-open and mmap the backing file (may be a different file than at snapshot time)
-            let (file, file_len, mmap_ptr, mmap_len) = Pmem::mmap_backing_file(
-                &locked_dev.config.path_on_host,
-                locked_dev.config.read_only
-            ).map_err(|e| BuildMicrovmFromSnapshotError::CreateMicrovmAndVcpus(
-                StartMicrovmError::CreatePmemDevice(e)
-            ))?;
-            
-            eprintln!("[RESTORE] After re-mmap: new_mmap_ptr={:#x}, new_file_len={}, new_mmap_len={:#x}",
-                mmap_ptr, file_len, mmap_len);
-            
-            locked_dev.file = file;
-            locked_dev.file_len = file_len;
-            locked_dev.mmap_ptr = mmap_ptr;
-            locked_dev.config_space.size = mmap_len;
-            locked_dev.config_space.start = Pmem::RAW_MEMORY_BASE;
-            
-            eprintln!("[RESTORE] Calling set_mem_region with mmap_ptr={:#x}, size={:#x}, guest_addr={:#x}",
-                locked_dev.mmap_ptr, locked_dev.config_space.size, locked_dev.config_space.start);
-            
-            // Re-register the KVM memory region with the new mmap pointer
-            locked_dev.set_mem_region(vm.as_ref())
-                .map_err(|e| BuildMicrovmFromSnapshotError::CreateMicrovmAndVcpus(
-                    StartMicrovmError::CreatePmemDevice(e)
-                ))?;
-            
-            eprintln!("[RESTORE] Successfully restored raw_memory pmem device");
-        }
-    }
-
     let mut vmm = Vmm {
         instance_info: instance_info.clone(),
         shutdown_exit_code: None,
@@ -737,7 +698,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
     event_manager: &mut EventManager,
 ) -> Result<(), StartMicrovmError> {
     for (i, device) in pmem_devices.enumerate() {
-        let (id, is_raw_memory) = {
+        let id = {
             let mut locked_dev = device.lock().expect("Poisoned lock");
             
             // Allocate region and set up memory mapping
@@ -770,14 +731,14 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
                     locked_dev.config_space.size))?;
             }
             
-            (locked_dev.config.id.to_string(), is_raw)
+            locked_dev.config.id.to_string()
         };
 
-        if !is_raw_memory {
-            // Only register as virtio device if not in raw memory mode
-            event_manager.add_subscriber(device.clone());
-            device_manager.attach_virtio_device(vm, id, device.clone(), cmdline, false)?;
-        }
+        // Register all pmem devices (including raw_memory) as virtio devices
+        // This ensures they're saved in snapshots, even though raw_memory devices
+        // don't use virtio queues for communication
+        event_manager.add_subscriber(device.clone());
+        device_manager.attach_virtio_device(vm, id, device.clone(), cmdline, false)?;
     }
     Ok(())
 }

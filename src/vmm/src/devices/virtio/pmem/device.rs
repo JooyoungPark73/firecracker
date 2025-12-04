@@ -238,10 +238,6 @@ impl Pmem {
             },
         };
 
-        eprintln!("[PMEM] set_mem_region: slot={}, guest_phys_addr={:#x}, memory_size={:#x}, userspace_addr={:#x}, flags={}",
-            memory_region.slot, memory_region.guest_phys_addr, memory_region.memory_size, 
-            memory_region.userspace_addr, memory_region.flags);
-
         vm.set_user_memory_region(memory_region)
             .map_err(PmemError::SetUserMemoryRegion)
     }

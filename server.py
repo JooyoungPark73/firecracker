@@ -85,7 +85,7 @@ def write_mmap_message(sock, mm, data):
 
 def main_mmap(mmap_path='/tmp/firecracker-pmem', mmap_size=16*1024*1024):
     
-    f = os.open(mmap_path, os.O_RDWR | os.O_SYNC)
+    f = os.open(mmap_path, os.O_RDWR)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         mm = mmap.mmap(f, mmap_size, offset=OFFSET_MEM, prot=mmap.PROT_READ | mmap.PROT_WRITE, flags=mmap.MAP_SHARED)
@@ -153,10 +153,106 @@ def write_message(conn, data):
     conn.sendall(struct.pack('!I', length))
     conn.sendall(data) 
 
+def main_benchmark(mmap_path='/tmp/firecracker-pmem', mmap_size=16*1024*1024, num_iterations=10):
+    import hashlib
+    import statistics
+    
+    f = os.open(mmap_path, os.O_RDWR | os.O_SYNC)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        mm = mmap.mmap(f, mmap_size, offset=OFFSET_MEM, prot=mmap.PROT_READ | mmap.PROT_WRITE, flags=mmap.MAP_SHARED)
+        s.bind(('0.0.0.0', 9000))
+        s.listen(1)
+        print("Benchmark Server listening on port 9000")
+        print(f"Running {num_iterations} iterations for each size")
+        print("="*60)
+        
+        conn, addr = s.accept()
+        print(f"Connected to {addr}")
+        
+        # Test sizes: 10B, 10KB, 10MB
+        test_sizes = [10, 10*1024, 10*1024*1024]
+        
+        for size in test_sizes:
+            print(f"\nTesting {size} bytes:")
+            h_to_g_times = []
+            g_to_h_times = []
+            
+            for i in range(num_iterations):
+                # Receive expected MD5 from guest over socket
+                expected_md5_bytes = conn.recv(32)
+                if len(expected_md5_bytes) != 32:
+                    print(f"Error: Failed to receive MD5 at iteration {i}")
+                    break
+                expected_md5 = expected_md5_bytes.decode('ascii')
+                
+                # Guest -> Host (receive data via mmap)
+                start_time = time.time_ns() // 1000
+                msg = read_mmap_message(conn, mm)
+                end_time = time.time_ns() // 1000
+                g_to_h_time = end_time - start_time
+                
+                if msg is None:
+                    print(f"Error: Failed to receive message at iteration {i}")
+                    break
+                
+                # Verify data integrity by computing MD5 of received data
+                received_md5 = hashlib.md5(msg).hexdigest()
+                verified = (received_md5 == expected_md5)
+                
+                if not verified:
+                    print(f"Warning: G->H verification failed at iteration {i}")
+                    print(f"  Expected: {expected_md5}")
+                    print(f"  Received: {received_md5}")
+                
+                # Send verification result back to guest
+                conn.sendall(b'1' if verified else b'0')
+                
+                # Generate new random data for Host -> Guest
+                host_data = os.urandom(size)
+                host_md5 = hashlib.md5(host_data).hexdigest()
+                
+                # Send MD5 to guest over socket
+                conn.sendall(host_md5.encode('ascii'))
+                
+                # Host -> Guest (send data via mmap)
+                start_time = time.time_ns() // 1000
+                write_mmap_message(conn, mm, host_data)
+                end_time = time.time_ns() // 1000
+                h_to_g_time = end_time - start_time
+                
+                # Wait for verification from guest
+                guest_verification = conn.recv(1)
+                if guest_verification != b'1':
+                    print(f"Warning: H->G verification failed at iteration {i}")
+                
+                # Skip first iteration (page faulting)
+                if i > 0:
+                    h_to_g_times.append(h_to_g_time)
+                    g_to_h_times.append(g_to_h_time)
+                    print(f"  Iter {i}: G->H={g_to_h_time}μs (MD5={'OK' if verified else 'FAIL'}), H->G={h_to_g_time}μs")
+                else:
+                    print(f"  Iter {i} (warmup, skipped): G->H={g_to_h_time}μs, H->G={h_to_g_time}μs")
+            
+            # Calculate statistics (excluding first iteration)
+            if h_to_g_times and g_to_h_times:
+                print(f"\n  Statistics for {size} bytes (excluding first iteration):")
+                print(f"    Guest->Host: avg={statistics.mean(g_to_h_times):.2f}μs, stdev={statistics.stdev(g_to_h_times) if len(g_to_h_times) > 1 else 0:.2f}μs")
+                print(f"    Host->Guest: avg={statistics.mean(h_to_g_times):.2f}μs, stdev={statistics.stdev(h_to_g_times) if len(h_to_g_times) > 1 else 0:.2f}μs")
+        
+        conn.close()
+        mm.close()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+    finally:
+        s.close()
+        os.close(f)
+
 if __name__ == "__main__":
     # main()
     # main_vsock_unix()
-    main_mmap()
+    # main_mmap()
+    main_benchmark()
     
     
     

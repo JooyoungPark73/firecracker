@@ -86,9 +86,9 @@ def write_mmap_message(sock, mm, data):
 def main_mmap(mmap_path='/tmp/firecracker-pmem', mmap_size=16*1024*1024):
     
     f = os.open(mmap_path, os.O_RDWR | os.O_SYNC)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         mm = mmap.mmap(f, mmap_size, offset=OFFSET_MEM, prot=mmap.PROT_READ | mmap.PROT_WRITE, flags=mmap.MAP_SHARED)
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.bind(('0.0.0.0', 9000))
         s.listen(1)
         print("Server listening on port 9000")
@@ -106,8 +106,12 @@ def main_mmap(mmap_path='/tmp/firecracker-pmem', mmap_size=16*1024*1024):
                     print(f"Time taken host->guest: {end_time - start_time} microseconds")
             conn.close()
         mm.close()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
     finally:
+        s.close()
         os.close(f)
+
 
 def read_large_mmap_message(sock, mm):
     full_data = b''

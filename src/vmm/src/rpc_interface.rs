@@ -529,7 +529,11 @@ impl<'a> PrebootApiController<'a> {
     }
 
     fn insert_pmem_device(&mut self, cfg: PmemConfig) -> Result<VmmData, VmmActionError> {
-        self.boot_path = true;
+        // Raw_memory pmem devices don't prevent snapshot loading since they're not
+        // part of the boot process and are excluded from snapshots
+        if !cfg.raw_memory {
+            self.boot_path = true;
+        }
         self.vm_resources
             .build_pmem_device(cfg)
             .map(|()| VmmData::Empty)

@@ -97,6 +97,7 @@ static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 	unsigned long size = vma->vm_end - vma->vm_start;
 	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
 	phys_addr_t phys;
+	int ret;
 
 	/* Check bounds */
 	if (offset + size > shmem_size) {
@@ -119,16 +120,11 @@ static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 	 */
 	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 
-	/* Prevent swapping and dumping of this memory */
-	vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
-
-	/* Map the physical memory region */
-	if (remap_pfn_range(vma, vma->vm_start,
-			    phys >> PAGE_SHIFT,
-			    size,
-			    vma->vm_page_prot)) {
-		pr_err("khala_shmem: remap_pfn_range failed\n");
-		return -EAGAIN;
+	/* Map the physical memory region using vm_iomap_memory */
+	ret = vm_iomap_memory(vma, phys, size);
+	if (ret) {
+		pr_err("khala_shmem: vm_iomap_memory failed with error %d\n", ret);
+		return ret;
 	}
 
 	pr_debug("khala_shmem: mmap success: virt=0x%lx phys=0x%llx size=0x%lx\n",

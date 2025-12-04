@@ -99,6 +99,9 @@ impl Pmem {
     // Pmem devices need to have address and size to be
     // a multiple of 2MB
     pub const ALIGNMENT: u64 = 2 * 1024 * 1024;
+    // Fixed base address for raw_memory mode to avoid conflicts during snapshot/restore
+    // Located at 1TB, well above PCI MMIO64 space which ends at 512GB (0x8000000000)
+    pub const RAW_MEMORY_BASE: u64 = 0x100_0000_0000;
 
     /// Create a new Pmem device with a backing file at `disk_image_path` path.
     pub fn new(config: PmemConfig) -> Result<Self, PmemError> {
@@ -234,6 +237,10 @@ impl Pmem {
                 0
             },
         };
+
+        eprintln!("[PMEM] set_mem_region: slot={}, guest_phys_addr={:#x}, memory_size={:#x}, userspace_addr={:#x}, flags={}",
+            memory_region.slot, memory_region.guest_phys_addr, memory_region.memory_size, 
+            memory_region.userspace_addr, memory_region.flags);
 
         vm.set_user_memory_region(memory_region)
             .map_err(PmemError::SetUserMemoryRegion)

@@ -67,6 +67,12 @@ impl<'a> Persist<'a> for Pmem {
         pmem.avail_features = state.virtio_state.avail_features;
         pmem.acked_features = state.virtio_state.acked_features;
 
+        // For raw_memory mode, override with fixed address to ensure consistency
+        // The kernel cmdline will have been regenerated with this fixed address
+        if pmem.config.raw_memory {
+            pmem.config_space.start = Pmem::RAW_MEMORY_BASE;
+        }
+
         pmem.set_mem_region(constructor_args.vm)?;
 
         Ok(pmem)

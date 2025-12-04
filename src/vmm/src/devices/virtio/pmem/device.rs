@@ -407,6 +407,7 @@ mod tests {
             path_on_host: "not_a_path".into(),
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         assert!(matches!(
             Pmem::new(config).unwrap_err(),
@@ -420,6 +421,7 @@ mod tests {
             path_on_host: dummy_path.clone(),
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         assert!(matches!(
             Pmem::new(config).unwrap_err(),
@@ -432,6 +434,7 @@ mod tests {
             path_on_host: dummy_path,
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         Pmem::new(config).unwrap();
     }
@@ -446,6 +449,7 @@ mod tests {
             path_on_host: dummy_path,
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         let mut pmem = Pmem::new(config).unwrap();
 

@@ -94,6 +94,7 @@ mod tests {
             path_on_host: dummy_path,
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         let pmem = Pmem::new(config).unwrap();
         let guest_mem = default_mem();

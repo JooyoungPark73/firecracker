@@ -698,22 +698,40 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
     event_manager: &mut EventManager,
 ) -> Result<(), StartMicrovmError> {
     for (i, device) in pmem_devices.enumerate() {
-        let id = {
+        let (id, is_raw_memory) = {
             let mut locked_dev = device.lock().expect("Poisoned lock");
-            if locked_dev.config.root_device {
-                cmdline.insert_str(format!("root=/dev/pmem{i}"))?;
-                match locked_dev.config.read_only {
-                    true => cmdline.insert_str("ro")?,
-                    false => cmdline.insert_str("rw")?,
-                }
-            }
+            
+            // Allocate region and set up memory mapping for both modes
             locked_dev.alloc_region(vm.as_ref());
             locked_dev.set_mem_region(vm.as_ref())?;
-            locked_dev.config.id.to_string()
+            
+            let is_raw = locked_dev.config.raw_memory;
+            
+            if !is_raw {
+                // Traditional virtio-pmem mode
+                if locked_dev.config.root_device {
+                    cmdline.insert_str(format!("root=/dev/pmem{i}"))?;
+                    match locked_dev.config.read_only {
+                        true => cmdline.insert_str("ro")?,
+                        false => cmdline.insert_str("rw")?,
+                    }
+                }
+            } else {
+                // Raw memory mode - pass physical address to khala-shmem driver
+                // Format: khala_shmem=<phys_addr>,<size>
+                cmdline.insert_str(format!("khala_shmem={:#x},{:#x}",
+                    locked_dev.config_space.start,
+                    locked_dev.config_space.size))?;
+            }
+            
+            (locked_dev.config.id.to_string(), is_raw)
         };
 
-        event_manager.add_subscriber(device.clone());
-        device_manager.attach_virtio_device(vm, id, device.clone(), cmdline, false)?;
+        if !is_raw_memory {
+            // Only register as virtio device if not in raw memory mode
+            event_manager.add_subscriber(device.clone());
+            device_manager.attach_virtio_device(vm, id, device.clone(), cmdline, false)?;
+        }
     }
     Ok(())
 }
@@ -1272,6 +1290,7 @@ pub(crate) mod tests {
             path_on_host: "".into(),
             root_device: true,
             read_only: true,
+            raw_memory: false,
         }];
         let mut vmm = default_vmm();
         let mut cmdline = default_kernel_cmdline();

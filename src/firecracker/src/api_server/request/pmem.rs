@@ -69,6 +69,7 @@ mod tests {
             path_on_host: "dummy".to_string(),
             root_device: true,
             read_only: true,
+            raw_memory: false,
         };
         assert_eq!(r, VmmAction::InsertPmemDevice(expected_config));
     }

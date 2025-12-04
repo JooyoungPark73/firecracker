@@ -204,6 +204,10 @@ function build_al_kernel {
 
     # patch -p1 < $GIT_ROOT_DIR/resources/patch/increase-vsock-rx-buffer.patch
     patch -p1 < $GIT_ROOT_DIR/resources/patch/reverse-revert-vmgenid-6.1.patch
+    
+    # Add khala-shmem driver
+    patch -p1 < $GIT_ROOT_DIR/resources/patch/add-khala-shmem-driver.patch
+    cp $GIT_ROOT_DIR/resources/patch/khala_shmem.c drivers/char/
 
     # Concatenate all config files into one. olddefconfig will then resolve
     # as needed. Later values override earlier ones.
@@ -225,7 +229,7 @@ function build_al_kernel {
 function prepare_and_build_rootfs {
     BIN_DIR=overlay/usr/local/bin
 
-    SRCS=(init.c fillmem.c fast_page_fault_helper.c readmem.c go_sdk_cred_provider.go go_sdk_cred_provider_with_custom_endpoint.go)
+    SRCS=(init.c fillmem.c readmem.c go_sdk_cred_provider.go go_sdk_cred_provider_with_custom_endpoint.go)
     if [ $ARCH == "aarch64" ]; then
         SRCS+=(devmemread.c)
     fi
@@ -276,15 +280,16 @@ function build_al_kernels {
     PMEM_CONFIG="$PWD/guest_configs/virtio-pmem.config"
     MEM_CONFIG="$PWD/guest_configs/virtio-mem.config"
     VMCLOCK_CONFIG="$PWD/guest_configs/vmclock.config"
+    KHALA_SHMEM_CONFIG="$PWD/guest_configs/khala-shmem.config"
 
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$KHALA_SHMEM_CONFIG"
     fi
     if [[ $ARCH == "x86_64" && "$KERNEL_VERSION" == @(all|5.10-no-acpi) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$KHALA_SHMEM_CONFIG"
     fi
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG" "$KHALA_SHMEM_CONFIG"
     fi
 
     # Build debug kernels
@@ -293,11 +298,11 @@ function build_al_kernels {
     OUTPUT_DIR=$OUTPUT_DIR/debug
     mkdir -pv $OUTPUT_DIR
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
-        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG"
+        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$KHALA_SHMEM_CONFIG"
         vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-5.10.*
     fi
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
-        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$VMCLOCK_CONFIG" "$KHALA_SHMEM_CONFIG"
         vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-6.1.*
     fi
 }

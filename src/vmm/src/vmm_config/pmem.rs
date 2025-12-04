@@ -34,6 +34,10 @@ pub struct PmemConfig {
     /// Map the file as read only
     #[serde(default)]
     pub read_only: bool,
+    /// Expose as raw memory region without virtio-pmem device (bypasses NVDIMM subsystem)
+    /// Guest accesses via /dev/khala-shmem at the allocated physical address
+    #[serde(default)]
+    pub raw_memory: bool,
 }
 
 /// Wrapper for the collection that holds all the Pmem devices.
@@ -119,6 +123,7 @@ mod tests {
             path_on_host: dummy_path,
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         builder.build(config.clone(), false).unwrap();
         assert_eq!(builder.devices.len(), 1);
@@ -143,6 +148,7 @@ mod tests {
             path_on_host: dummy_path,
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         builder.build(config.clone(), false).unwrap();
 
@@ -165,6 +171,7 @@ mod tests {
             path_on_host: dummy_path,
             root_device: true,
             read_only: false,
+            raw_memory: false,
         };
         assert!(matches!(
             builder.build(config, true).unwrap_err(),

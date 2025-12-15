@@ -10,6 +10,10 @@
  *   khala_shmem=<phys_addr>,<size>
  *
  * Example: khala_shmem=0x100000000,0x1000000 (256MB at 4GB)
+ * Changes:
+ * - Switched to remap_pfn_range for manual control (No VM_IO flag).
+ * - Added VM_MIXEDMAP to support raw PFN mapping without forced IO side-effects.
+ * - Enforces Write-Back caching via default protection + no VM_IO.
  */
 
 #include <linux/module.h>
@@ -21,6 +25,8 @@
 #include <linux/mm.h>
 #include <linux/io.h>
 #include <linux/uaccess.h>
+/* Needed for version checks if compiling on Kernel 6.4+ */
+#include <linux/version.h> 
 
 #define DEVICE_NAME "khala-shmem"
 #define CLASS_NAME "khala"
@@ -30,21 +36,18 @@ static struct cdev khala_cdev;
 static struct class *khala_class;
 static struct device *khala_device;
 
-/* Shared memory region info from kernel cmdline */
 static phys_addr_t shmem_phys_addr;
 static size_t shmem_size;
 
-/* Parse khala_shmem=<addr>,<size> from kernel cmdline */
+/* Parse khala_shmem=<addr>,<size> */
 static int __init parse_khala_shmem(char *str)
 {
 	char *endp;
 
-	if (!str)
-		return 0;
+	if (!str) return 0;
 
 	shmem_phys_addr = simple_strtoull(str, &endp, 0);
-	if (*endp != ',')
-		return 0;
+	if (*endp != ',') return 0;
 
 	str = endp + 1;
 	shmem_size = simple_strtoull(str, &endp, 0);
@@ -58,7 +61,6 @@ __setup("khala_shmem=", parse_khala_shmem);
 
 static int khala_open(struct inode *inode, struct file *filp)
 {
-	/* Allow multiple opens */
 	return 0;
 }
 
@@ -72,22 +74,13 @@ static loff_t khala_llseek(struct file *filp, loff_t offset, int whence)
 	loff_t newpos;
 
 	switch (whence) {
-	case SEEK_SET:
-		newpos = offset;
-		break;
-	case SEEK_CUR:
-		newpos = filp->f_pos + offset;
-		break;
-	case SEEK_END:
-		newpos = shmem_size + offset;
-		break;
-	default:
-		return -EINVAL;
+	case SEEK_SET: newpos = offset; break;
+	case SEEK_CUR: newpos = filp->f_pos + offset; break;
+	case SEEK_END: newpos = shmem_size + offset; break;
+	default: return -EINVAL;
 	}
 
-	if (newpos < 0 || newpos > shmem_size)
-		return -EINVAL;
-
+	if (newpos < 0 || newpos > shmem_size) return -EINVAL;
 	filp->f_pos = newpos;
 	return newpos;
 }
@@ -96,7 +89,7 @@ static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	unsigned long size = vma->vm_end - vma->vm_start;
 	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
-	phys_addr_t phys;
+	unsigned long pfn;
 	int ret;
 
 	/* Check bounds */
@@ -105,30 +98,28 @@ static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	phys = shmem_phys_addr + offset;
+	/* Calculate PFN (Physical Frame Number) */
+	pfn = (shmem_phys_addr + offset) >> PAGE_SHIFT;
 
-	/* Ensure physical address is page-aligned */
-	if (phys & ~PAGE_MASK) {
-		pr_err("khala_shmem: physical address not page-aligned\n");
-		return -EINVAL;
-	}
-
-	/*
-	 * Use default page protection (write-back caching) to match KVM's memory region
-	 * KVM doesn't support write-combining for guest memory regions, so we must use
-	 * the same cache mode to avoid PAT conflicts
-	 * Note: vma->vm_page_prot is already set to write-back by default
+	/* * OPTIMIZATION: 
+	 * 1. VM_IO is NOT set (vm_iomap_memory would set it).
+	 * This ensures the CPU treats it as memory (cacheable), not MMIO.
+	 * 2. VM_MIXEDMAP allows raw PFNs to live in the VMA without struct pages.
+	 * This is friendlier to future Huge Page optimizations.
 	 */
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP;
 
-	/* Map the physical memory region using vm_iomap_memory */
-	ret = vm_iomap_memory(vma, phys, size);
+	/* * Use remap_pfn_range instead of vm_iomap_memory.
+	 * We trust vma->vm_page_prot (defaults to Write-Back) is correct.
+	 */
+	ret = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
 	if (ret) {
-		pr_err("khala_shmem: vm_iomap_memory failed with error %d\n", ret);
+		pr_err("khala_shmem: remap_pfn_range failed: %d\n", ret);
 		return ret;
 	}
 
-	pr_debug("khala_shmem: mmap success: virt=0x%lx phys=0x%llx size=0x%lx\n",
-		 vma->vm_start, (unsigned long long)phys, size);
+	pr_debug("khala_shmem: mmap success: virt=0x%lx pfn=0x%lx size=0x%lx\n",
+		 vma->vm_start, pfn, size);
 
 	return 0;
 }
@@ -145,54 +136,46 @@ static int __init khala_shmem_init(void)
 {
 	int ret;
 
-	/* Check if shared memory was configured */
 	if (!shmem_phys_addr || !shmem_size) {
-		pr_info("khala_shmem: No shared memory configured (missing khala_shmem= cmdline)\n");
+		pr_info("khala_shmem: missing khala_shmem= cmdline\n");
 		return -ENODEV;
 	}
 
-	/* Validate alignment */
+	/* Check Alignment */
 	if (!PAGE_ALIGNED(shmem_phys_addr) || !PAGE_ALIGNED(shmem_size)) {
-		pr_err("khala_shmem: Physical address or size not page-aligned\n");
+		pr_err("khala_shmem: Address/Size must be page aligned\n");
 		return -EINVAL;
 	}
 
-	/* Allocate character device number */
 	ret = alloc_chrdev_region(&khala_dev_num, 0, 1, DEVICE_NAME);
-	if (ret < 0) {
-		pr_err("khala_shmem: Failed to allocate device number: %d\n", ret);
-		return ret;
-	}
+	if (ret < 0) return ret;
 
-	/* Initialize character device */
 	cdev_init(&khala_cdev, &khala_fops);
 	khala_cdev.owner = THIS_MODULE;
 
 	ret = cdev_add(&khala_cdev, khala_dev_num, 1);
-	if (ret < 0) {
-		pr_err("khala_shmem: Failed to add character device: %d\n", ret);
-		goto fail_cdev_add;
-	}
+	if (ret < 0) goto fail_cdev_add;
 
-	/* Create device class */
+	/* Handle Kernel 6.4+ class_create API change */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+	khala_class = class_create(CLASS_NAME);
+#else
 	khala_class = class_create(THIS_MODULE, CLASS_NAME);
+#endif
+
 	if (IS_ERR(khala_class)) {
 		ret = PTR_ERR(khala_class);
-		pr_err("khala_shmem: Failed to create device class: %d\n", ret);
 		goto fail_class_create;
 	}
 
-	/* Create device node */
-	khala_device = device_create(khala_class, NULL, khala_dev_num,
-				     NULL, DEVICE_NAME);
+	khala_device = device_create(khala_class, NULL, khala_dev_num, NULL, DEVICE_NAME);
 	if (IS_ERR(khala_device)) {
 		ret = PTR_ERR(khala_device);
-		pr_err("khala_shmem: Failed to create device: %d\n", ret);
 		goto fail_device_create;
 	}
 
-	pr_info("khala_shmem: Initialized at phys=0x%llx size=0x%zx (/dev/%s)\n",
-		(unsigned long long)shmem_phys_addr, shmem_size, DEVICE_NAME);
+	pr_info("khala_shmem: Initialized at phys=0x%llx size=0x%zx\n",
+		(unsigned long long)shmem_phys_addr, shmem_size);
 
 	return 0;
 
@@ -211,7 +194,6 @@ static void __exit khala_shmem_exit(void)
 	class_destroy(khala_class);
 	cdev_del(&khala_cdev);
 	unregister_chrdev_region(khala_dev_num, 1);
-
 	pr_info("khala_shmem: Unloaded\n");
 }
 
@@ -221,4 +203,4 @@ module_exit(khala_shmem_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Hyscale Lab NTUsg");
 MODULE_DESCRIPTION("Khala shared memory character device driver");
-MODULE_VERSION("1.0");
+MODULE_VERSION("1.1");

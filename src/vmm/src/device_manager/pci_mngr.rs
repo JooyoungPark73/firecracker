@@ -11,6 +11,8 @@ use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 
 use super::persist::MmdsState;
+use crate::devices::khala::{KhalaError, KhalaPciDevice, KhalaPciDeviceState};
+use crate::devices::khala::persist::KhalaConstructorArgs;
 use crate::devices::pci::PciSegment;
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::balloon::persist::{BalloonConstructorArgs, BalloonState};
@@ -49,6 +51,8 @@ pub struct PciDevices {
     pub pci_segment: Option<PciSegment>,
     /// All VirtIO PCI devices of the system
     pub virtio_devices: HashMap<(u32, String), Arc<Mutex<VirtioPciDevice>>>,
+    /// All Khala shared memory PCI devices
+    pub khala_devices: HashMap<String, Arc<Mutex<KhalaPciDevice>>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -63,6 +67,8 @@ pub enum PciManagerError {
     Msi(#[from] InterruptError),
     /// VirtIO PCI device error: {0}
     VirtioPciDevice(#[from] VirtioPciDeviceError),
+    /// Khala PCI device error: {0}
+    KhalaPciDevice(#[from] KhalaError),
     /// KVM error: {0}
     Kvm(#[from] vmm_sys_util::errno::Error),
     /// MMDS error: {0}
@@ -213,6 +219,77 @@ impl PciDevices {
         self.virtio_devices
             .get(&(device_type, device_id.to_string()))
     }
+
+    /// Attach a Khala shared memory PCI device to the system
+    pub fn attach_khala_device(
+        &mut self,
+        vm: &Arc<Vm>,
+        id: String,
+        config: crate::vmm_config::khala::KhalaConfig,
+    ) -> Result<(), PciManagerError> {
+        use crate::devices::khala::KhalaPciDevice;
+
+        // We should only be reaching this point if PCI is enabled
+        let pci_segment = self.pci_segment.as_ref().unwrap();
+        let pci_device_bdf = pci_segment.next_device_bdf()?;
+        debug!("Allocating BDF: {pci_device_bdf:?} for Khala device '{}'", id);
+
+        // Create the Khala device
+        let mut khala_device = KhalaPciDevice::new(id.clone(), config.clone(), pci_device_bdf.into())?;
+
+        // Allocate BARs
+        let mut resource_allocator_lock = vm.resource_allocator();
+        let resource_allocator = resource_allocator_lock.deref_mut();
+        khala_device.allocate_bars(&mut resource_allocator.mmio64_memory)?;
+
+        // Map the shared memory file into guest address space
+        khala_device.map_shared_memory(vm)?;
+
+        let khala_device = Arc::new(Mutex::new(khala_device));
+
+        // Add device to PCI bus
+        pci_segment
+            .pci_bus
+            .lock()
+            .expect("Poisoned lock")
+            .add_device(pci_device_bdf.device() as u32, khala_device.clone());
+
+        // Register BARs with MMIO bus
+        Self::register_khala_bars_with_bus(vm, &khala_device)?;
+
+        // Store device reference
+        self.khala_devices.insert(id, khala_device);
+
+        Ok(())
+    }
+
+    /// Register Khala device BARs with the MMIO bus
+    fn register_khala_bars_with_bus(
+        vm: &Vm,
+        khala_device: &Arc<Mutex<KhalaPciDevice>>,
+    ) -> Result<(), PciManagerError> {
+        let khala_device_locked = khala_device.lock().expect("Poisoned lock");
+
+        // Register BAR 0 (shared memory) with MMIO bus
+        // When guest accesses this region, our read/write handlers will be called
+        debug!(
+            "Inserting Khala BAR 0 region: {:#x}:{:#x}",
+            khala_device_locked.shmem_bar_addr(),
+            16 * 1024 * 1024  // TODO: get actual size from device
+        );
+        vm.common.mmio_bus.insert(
+            khala_device.clone(),
+            khala_device_locked.shmem_bar_addr(),
+            16 * 1024 * 1024,  // TODO: get actual size from device
+        )?;
+        
+        Ok(())
+    }
+
+    /// Get a Khala device by ID
+    pub fn get_khala_device(&self, id: &str) -> Option<&Arc<Mutex<KhalaPciDevice>>> {
+        self.khala_devices.get(id)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +324,8 @@ pub struct PciDevicesState {
     pub pmem_devices: Vec<VirtioDeviceState<PmemState>>,
     /// Memory device state.
     pub memory_device: Option<VirtioDeviceState<VirtioMemState>>,
+    /// Khala device states.
+    pub khala_devices: Vec<KhalaPciDeviceState>,
 }
 
 pub struct PciDevicesConstructorArgs<'a> {
@@ -422,6 +501,13 @@ impl<'a> Persist<'a> for PciDevices {
                 }
                 _ => unreachable!(),
             }
+        }
+
+        // Save Khala PCI devices (non-virtio)
+        for khala_dev in self.khala_devices.values() {
+            let locked_dev = khala_dev.lock().expect("Poisoned lock");
+            let device_state = locked_dev.save();
+            state.khala_devices.push(device_state);
         }
 
         state
@@ -643,6 +729,37 @@ impl<'a> Persist<'a> for PciDevices {
                     constructor_args.event_manager,
                 )
                 .unwrap()
+        }
+
+        // Restore Khala PCI devices (non-virtio)
+        for khala_state in &state.khala_devices {
+            let restored_device = KhalaPciDevice::restore(
+                KhalaConstructorArgs {
+                    vm: constructor_args.vm.as_ref(),
+                },
+                khala_state,
+            )
+            .unwrap();
+
+            let pci_device_bdf: u32 = khala_state.pci_device_bdf.into();
+            // Extract device number from BDF (bits 3-7)
+            let device_num = ((pci_device_bdf >> 3) & 0x1f) as u32;
+            let khala_device = Arc::new(Mutex::new(restored_device));
+
+            // Add device to PCI bus
+            let pci_segment = pci_devices.pci_segment.as_ref().unwrap();
+            pci_segment
+                .pci_bus
+                .lock()
+                .expect("Poisoned lock")
+                .add_device(device_num, khala_device.clone());
+
+            // Register BARs with MMIO bus
+            PciDevices::register_khala_bars_with_bus(constructor_args.vm.as_ref(), &khala_device)
+                .unwrap();
+
+            // Store device reference
+            pci_devices.khala_devices.insert(khala_state.id.clone(), khala_device);
         }
 
         Ok(pci_devices)

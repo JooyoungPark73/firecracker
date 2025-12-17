@@ -378,6 +378,13 @@ impl PciConfiguration {
         }
     }
 
+    /// Set a raw register value directly (for read-only fields like Interrupt Pin)
+    pub fn set_register(&mut self, reg_idx: usize, value: u32) {
+        if reg_idx < NUM_CONFIGURATION_REGISTERS {
+            self.registers[reg_idx] = value;
+        }
+    }
+
     /// Detect whether the guest wants to reprogram the address of a BAR
     pub fn detect_bar_reprogramming(
         &mut self,

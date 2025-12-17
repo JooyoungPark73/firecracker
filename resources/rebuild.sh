@@ -276,6 +276,7 @@ function build_al_kernels {
     PMEM_CONFIG="$PWD/guest_configs/virtio-pmem.config"
     MEM_CONFIG="$PWD/guest_configs/virtio-mem.config"
     VMCLOCK_CONFIG="$PWD/guest_configs/vmclock.config"
+    KHALA_SHMEM_CONFIG="$PWD/guest_configs/khala-shmem.config"
 
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
         build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG"
@@ -284,7 +285,7 @@ function build_al_kernels {
         build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG"
     fi
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG" "$KHALA_SHMEM_CONFIG"
     fi
 
     # Build debug kernels

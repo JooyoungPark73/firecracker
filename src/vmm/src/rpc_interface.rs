@@ -29,6 +29,7 @@ use crate::vmm_config::boot_source::{BootSourceConfig, BootSourceConfigError};
 use crate::vmm_config::drive::{BlockDeviceConfig, BlockDeviceUpdateConfig, DriveError};
 use crate::vmm_config::entropy::{EntropyDeviceConfig, EntropyDeviceError};
 use crate::vmm_config::instance_info::InstanceInfo;
+use crate::vmm_config::khala::{KhalaConfig, KhalaConfigError};
 use crate::vmm_config::machine_config::{MachineConfig, MachineConfigError, MachineConfigUpdate};
 use crate::vmm_config::memory_hotplug::{
     MemoryHotplugConfig, MemoryHotplugConfigError, MemoryHotplugSizeUpdate,
@@ -83,6 +84,8 @@ pub enum VmmAction {
     InsertBlockDevice(BlockDeviceConfig),
     /// Add a virtio-pmem device.
     InsertPmemDevice(PmemConfig),
+    /// Add a Khala shared memory PCI device.
+    InsertKhalaDevice(KhalaConfig),
     /// Add a new network interface config or update one that already exists using the
     /// `NetworkInterfaceConfig` as input. This action can only be called before the microVM has
     /// booted.
@@ -167,6 +170,8 @@ pub enum VmmActionError {
     EntropyDevice(#[from] EntropyDeviceError),
     /// Pmem device error: {0}
     PmemDevice(#[from] PmemConfigError),
+    /// Khala device error: {0}
+    KhalaDevice(#[from] KhalaConfigError),
     /// Memory hotplug config error: {0}
     MemoryHotplugConfig(#[from] MemoryHotplugConfigError),
     /// Memory hotplug update error: {0}
@@ -465,6 +470,7 @@ impl<'a> PrebootApiController<'a> {
             GetVmmVersion => Ok(VmmData::VmmVersion(self.instance_info.vmm_version.clone())),
             InsertBlockDevice(config) => self.insert_block_device(config),
             InsertPmemDevice(config) => self.insert_pmem_device(config),
+            InsertKhalaDevice(config) => self.insert_khala_device(config),
             InsertNetworkDevice(config) => self.insert_net_device(config),
             LoadSnapshot(config) => self
                 .load_snapshot(&config)
@@ -534,6 +540,14 @@ impl<'a> PrebootApiController<'a> {
             .build_pmem_device(cfg)
             .map(|()| VmmData::Empty)
             .map_err(VmmActionError::PmemDevice)
+    }
+
+    fn insert_khala_device(&mut self, cfg: KhalaConfig) -> Result<VmmData, VmmActionError> {
+        self.boot_path = true;
+        self.vm_resources
+            .build_khala_device(cfg)
+            .map(|()| VmmData::Empty)
+            .map_err(VmmActionError::KhalaDevice)
     }
 
     fn set_balloon_device(&mut self, cfg: BalloonDeviceConfig) -> Result<VmmData, VmmActionError> {
@@ -778,6 +792,7 @@ impl RuntimeApiController {
             | ConfigureSerial(_)
             | InsertBlockDevice(_)
             | InsertPmemDevice(_)
+            | InsertKhalaDevice(_)
             | InsertNetworkDevice(_)
             | LoadSnapshot(_)
             | PutCpuConfiguration(_)

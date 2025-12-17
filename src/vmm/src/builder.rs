@@ -246,6 +246,11 @@ pub fn build_microvm_for_boot(
         event_manager,
     )?;
 
+    // Attach Khala shared memory devices if configured and PCI is enabled
+    if vm_resources.pci_enabled && !vm_resources.khala.is_empty() {
+        attach_khala_devices(&mut device_manager, &vm, vm_resources.khala.configs())?;
+    }
+
     if let Some(unix_vsock) = vm_resources.vsock.get() {
         attach_unixsock_vsock_device(
             &mut device_manager,
@@ -742,6 +747,25 @@ fn attach_balloon_device(
     event_manager.add_subscriber(balloon.clone());
     // The device mutex mustn't be locked here otherwise it will deadlock.
     device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, false)
+}
+
+fn attach_khala_devices(
+    device_manager: &mut DeviceManager,
+    vm: &Arc<Vm>,
+    khala_configs: Vec<crate::vmm_config::khala::KhalaConfig>,
+) -> Result<(), StartMicrovmError> {
+    debug!("attach_khala_devices called with {} configs", khala_configs.len());
+    for config in khala_configs.iter() {
+        debug!("Attaching Khala device '{}' (path={}, size={}MiB)",
+            config.id, config.shmem_path, config.size_mib);
+        
+        device_manager
+            .pci_devices
+            .attach_khala_device(vm, config.id.clone(), config.clone())
+            .map_err(StartMicrovmError::EnablePciDevices)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

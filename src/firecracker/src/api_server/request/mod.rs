@@ -9,6 +9,7 @@ pub mod drive;
 pub mod entropy;
 pub mod hotplug;
 pub mod instance_info;
+pub mod khala;
 pub mod logger;
 pub mod machine_configuration;
 pub mod metrics;

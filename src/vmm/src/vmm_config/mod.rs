@@ -18,6 +18,8 @@ pub mod drive;
 pub mod entropy;
 /// Wrapper over the microVM general information attached to the microVM.
 pub mod instance_info;
+/// Wrapper for configuring the Khala shared memory devices attached to the microVM.
+pub mod khala;
 /// Wrapper for configuring the memory and CPU of the microVM.
 pub mod machine_config;
 /// Wrapper for configuring memory hotplug.

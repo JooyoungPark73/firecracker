@@ -12,6 +12,7 @@
 use std::io;
 
 pub mod acpi;
+pub mod khala;
 pub mod legacy;
 pub mod pci;
 pub mod pseudo;

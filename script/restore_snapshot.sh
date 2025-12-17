@@ -1,0 +1,36 @@
+API_SOCKET="/tmp/firecracker.socket"
+LOGFILE="./firecracker.log"
+
+sudo curl -X PUT --unix-socket "${API_SOCKET}" \
+    --data "{
+        \"log_path\": \"${LOGFILE}\",
+        \"level\": \"Debug\",
+        \"show_level\": true,
+        \"show_log_origin\": true
+    }" \
+    "http://localhost/logger"
+
+echo "Loading snapshot..."
+sudo curl --unix-socket "${API_SOCKET}" -i \
+    -X PUT 'http://localhost/snapshot/load' \
+    -H  'Accept: application/json' \
+    -H  'Content-Type: application/json' \
+    -d '{
+            "snapshot_path": "./snapshot/snapshot_file",
+            "mem_backend": {
+                "backend_path": "./snapshot/mem_file",
+                "backend_type": "File"
+            },
+            "enable_diff_snapshots": false,
+            "resume_vm": false
+    }'
+
+
+echo "Resuming VM..."
+sudo curl --unix-socket "${API_SOCKET}" -i \
+    -X PATCH 'http://localhost/vm' \
+    -H 'Accept: application/json' \
+    -H 'Content-Type: application/json' \
+    -d '{
+            "state": "Resumed"
+    }'

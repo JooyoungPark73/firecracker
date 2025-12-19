@@ -1,0 +1,11 @@
+[Unit]
+Description=Instant PTP Time Sync on VM Resume
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ptp_sync
+# Explicitly grant time modification capabilities (usually default for root, but being safe)
+CapabilityBoundingSet=CAP_SYS_TIME
+AmbientCapabilities=CAP_SYS_TIME

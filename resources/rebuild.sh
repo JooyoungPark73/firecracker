@@ -225,7 +225,9 @@ function build_al_kernel {
 function prepare_and_build_rootfs {
     BIN_DIR=overlay/usr/local/bin
 
-    SRCS=(init.c fillmem.c fast_page_fault_helper.c readmem.c go_sdk_cred_provider.go go_sdk_cred_provider_with_custom_endpoint.go)
+    # SRCS=(init.c fillmem.c fast_page_fault_helper.c readmem.c go_sdk_cred_provider.go go_sdk_cred_provider_with_custom_endpoint.go)
+    SRCS=(init.c)
+    SRCS+=(ptp_sync.c)
     if [ $ARCH == "aarch64" ]; then
         SRCS+=(devmemread.c)
     fi

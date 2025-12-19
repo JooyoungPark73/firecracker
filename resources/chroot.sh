@@ -14,7 +14,7 @@ cp -ruv $rootfs/* /
 packages="udev systemd-sysv openssh-server iproute2 curl socat python3-minimal iperf3 iputils-ping fio kmod tmux hwloc-nox vim-tiny trace-cmd linuxptp strace python3-boto3 pciutils"
 
 # Add nexus workload dependencies
-packages="$packages python3-pip htop git wget vim net-tools rsync numactl chrony"
+packages="$packages python3-pip htop git wget net-tools rsync numactl chrony"
 # Add OpenCV library dependencies
 packages="$packages libegl1 libgl1"
 
@@ -35,26 +35,27 @@ echo "ubuntu-fc-uvm" > /etc/hostname
 # set chrony
 # echo 'refclock PHC /dev/ptp0 poll 0 dpoll 0 offset 0 prefer' >> /etc/chrony/chrony.conf
 cat <<'EOF' > "/etc/chrony/chrony.conf"
-refclock PHC /dev/ptp0 poll -4 offset 0 prefer
-makestep 1 -1
+refclock PHC /dev/ptp0 poll 3 trust offset 0 prefer
+makestep 0.1 -1
+cmdport 0
 leapsectz right/UTC
 driftfile /var/lib/chrony/chrony.drift
 logdir /var/log/chrony
 EOF
 
 cat <<'EOF' > "/etc/udev/rules.d/99-vmgenid-resync-clock.rules"
-ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/logger VMGenID udev rule triggered for clock sync"
-ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/systemd-run /bin/systemctl restart chrony.service"
+ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/usr/bin/logger VMGenID clock sync trigger"
+ACTION=="change", SUBSYSTEM=="platform", DRIVER=="vmgenid", ENV{NEW_VMGENID}=="1", RUN+="/bin/systemctl start ptp-sync.service"
 EOF
 
 passwd -d root
 
 # Install pylon workload dependencies
-pip_packages="grpcio grpcio-tools flatbuffers boto3"
-pip_packages="$pip_packages pyaes pillow scikit-learn opencv-python-headless pandas imgaug psutil mxnet minio chameleon"
+pip_packages="grpcio==1.71.0 grpcio-tools==1.71.0 boto3==1.38.27"
+pip_packages="$pip_packages pyaes==1.6.1 pillow==11.2.1 scikit-learn==1.6.1 opencv-python-headless==4.11.0.86 pandas==2.2.3 imgaug==0.4.0 psutil==7.0.0 minio==7.2.15 chameleon==4.6.0"
 pip3 install $pip_packages --break-system-packages
 
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu --break-system-packages
+pip3 install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cpu --break-system-packages
 
 pip3 cache purge
 
@@ -96,6 +97,7 @@ systemctl enable var-lib-systemd.mount
 # disable Predictable Network Interface Names to keep ethN names
 # even with PCI enabled
 ln -s /dev/null /etc/systemd/network/99-default.link
+
 
 #### trim image https://wiki.ubuntu.com/ReducingDiskFootprint
 # this does not save much, but oh well

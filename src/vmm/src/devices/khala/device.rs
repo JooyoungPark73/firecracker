@@ -22,14 +22,14 @@ use crate::Vm;
 
 /// PCI Vendor ID for Khala device (0x1234 = Generic/QEMU)
 pub const KHALA_VENDOR_ID: u16 = 0x1234;
-/// PCI Device ID for Khala device (0xDEAD = Custom ID)
-pub const KHALA_DEVICE_ID: u16 = 0xDEAD;
+/// PCI Device ID for Khala device (0x1110 = Khala Shared Memory)
+pub const KHALA_DEVICE_ID: u16 = 0x1110;
 /// PCI Revision ID
 pub const KHALA_REVISION_ID: u8 = 0x01;
 /// PCI Subsystem Vendor ID
 pub const KHALA_SUBSYSTEM_VENDOR_ID: u16 = 0x1234;
 /// PCI Subsystem ID
-pub const KHALA_SUBSYSTEM_ID: u16 = 0xDEAD;
+pub const KHALA_SUBSYSTEM_ID: u16 = 0x1110;
 
 /// BAR 0: Shared memory region
 pub const SHMEM_BAR_INDEX: usize = 0;

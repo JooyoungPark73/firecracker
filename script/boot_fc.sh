@@ -24,6 +24,16 @@ sudo iptables -t nat -A POSTROUTING -o "$HOST_IFACE" -j MASQUERADE
 API_SOCKET="/tmp/firecracker.socket"
 LOGFILE="./firecracker.log"
 
+# Set machine configuration
+sudo curl -X PUT --unix-socket "${API_SOCKET}" \
+    --data "{
+        \"vcpu_count\": 2,
+        \"mem_size_mib\": 1024,
+        \"track_dirty_pages\": false
+    }" \
+    "http://localhost/machine-config"
+
+
 # # Create log file
 # touch $LOGFILE
 

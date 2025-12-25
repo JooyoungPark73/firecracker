@@ -104,7 +104,8 @@ sudo curl --unix-socket "${API_SOCKET}" -i \
 
 
 KERNEL="/users/nehalem/firecracker/resources/x86_64/vmlinux-6.1.155"
-KERNEL_BOOT_ARGS="console=ttyS0 reboot=k panic=1 i8042.nokbd i8042.noaux 8250.nr_uarts=0 ipv6.disable=1 overlay_root=ram init=/sbin/overlay-init iomem=relaxed uio_pci_generic.ids=1234:dead"
+# KERNEL_BOOT_ARGS="console=ttyS0 reboot=k panic=1 i8042.nokbd i8042.noaux 8250.nr_uarts=0 ipv6.disable=1 overlay_root=ram init=/sbin/overlay-init iomem=relaxed uio_pci_generic.ids=1234:dead"
+KERNEL_BOOT_ARGS="console=ttyS0 reboot=k panic=1 i8042.nokbd i8042.noaux 8250.nr_uarts=0 ipv6.disable=1 overlay_root=ram init=/sbin/overlay-init iomem=relaxed"
 
 ARCH=$(uname -m)
 

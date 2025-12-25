@@ -187,6 +187,9 @@ function build_al_kernel {
     make distclean || true
 
     git checkout $(get_tag $KERNEL_VERSION)
+    # Reset to clean state to allow patches to be applied cleanly on subsequent builds
+    git reset --hard HEAD
+    git clean -fd
 
     arch=$(uname -m)
     if [ "$arch" = "x86_64" ]; then

@@ -1,22 +1,22 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Khala Device Snapshot/Restore Support
+//! Nexus Device Snapshot/Restore Support
 
 use serde::{Deserialize, Serialize};
 
-use super::device::{KhalaConfig, KhalaError, KhalaPciDevice};
+use super::device::{NexusConfig, NexusError, NexusPciDevice};
 use crate::pci::configuration::{PciConfiguration, PciConfigurationState};
 use crate::snapshot::Persist;
 use crate::Vm;
 
-/// Saved state for Khala PCI device
+/// Saved state for Nexus PCI device
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KhalaPciDeviceState {
+pub struct NexusPciDeviceState {
     /// Device identifier
     pub id: String,
     /// Device configuration (file path, size)
-    pub config: KhalaConfig,
+    pub config: NexusConfig,
     /// PCI BDF (Bus/Device/Function)
     pub pci_device_bdf: u32,
     /// PCI configuration state
@@ -29,27 +29,27 @@ pub struct KhalaPciDeviceState {
     pub shmem_size_bytes: u64,
 }
 
-/// Constructor arguments for restoring Khala device
+/// Constructor arguments for restoring Nexus device
 #[derive(Debug)]
-pub struct KhalaConstructorArgs<'a> {
+pub struct NexusConstructorArgs<'a> {
     /// VM reference for KVM registration
     pub vm: &'a Vm,
 }
 
-/// Errors during Khala snapshot/restore
+/// Errors during Nexus snapshot/restore
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
-pub enum KhalaPersistError {
-    /// Error creating Khala device: {0}
-    Khala(#[from] KhalaError),
+pub enum NexusPersistError {
+    /// Error creating Nexus device: {0}
+    Nexus(#[from] NexusError),
 }
 
-impl<'a> Persist<'a> for KhalaPciDevice {
-    type State = KhalaPciDeviceState;
-    type ConstructorArgs = KhalaConstructorArgs<'a>;
-    type Error = KhalaPersistError;
+impl<'a> Persist<'a> for NexusPciDevice {
+    type State = NexusPciDeviceState;
+    type ConstructorArgs = NexusConstructorArgs<'a>;
+    type Error = NexusPersistError;
 
     fn save(&self) -> Self::State {
-        KhalaPciDeviceState {
+        NexusPciDeviceState {
             id: self.id.clone(),
             config: self.config.clone(),
             pci_device_bdf: self.pci_device_bdf,
@@ -65,7 +65,7 @@ impl<'a> Persist<'a> for KhalaPciDevice {
         state: &Self::State,
     ) -> Result<Self, Self::Error> {
         // Create new device with saved configuration
-        let mut device = KhalaPciDevice::new(
+        let mut device = NexusPciDevice::new(
             state.id.clone(),
             state.config.clone(),
             state.pci_device_bdf,

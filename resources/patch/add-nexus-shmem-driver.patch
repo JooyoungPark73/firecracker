@@ -6,15 +6,15 @@ index 1e6f80d099d0..a1b5a1e2c3d4 100644
  	  and SSM (Silicon Secured Memory).  Intended consumers of this
  	  driver include crash and makedumpfile.
  
-+config KHALA_SHMEM
-+	tristate "Khala shared memory device support"
++config NEXUS_SHMEM
++	tristate "Nexus shared memory device support"
 +	depends on X86_64 || ARM64
 +	help
-+	  This driver provides a character device (/dev/khala-shmem) that
++	  This driver provides a character device (/dev/nexus-shmem) that
 +	  exposes a physical memory region for host-guest communication in
 +	  Firecracker VMs.
 +
-+	  The memory region is configured via the khala_shmem=<addr>,<size>
++	  The memory region is configured via the nexus_shmem=<addr>,<size>
 +	  kernel command line parameter and can be mmap'd by userspace
 +	  applications for efficient zero-copy data sharing.
 +
@@ -31,5 +31,5 @@ index 1b35d1724565..c2a3b1e4d5e6 100644
  obj-$(CONFIG_XILLYBUS_CLASS)	+= xillybus/
  obj-$(CONFIG_POWERNV_OP_PANEL)	+= powernv-op-panel.o
  obj-$(CONFIG_ADI)		+= adi.o
-+obj-$(CONFIG_KHALA_SHMEM)	+= khala_shmem.o
++obj-$(CONFIG_NEXUS_SHMEM)	+= nexus_shmem.o
 +

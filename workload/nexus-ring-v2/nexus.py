@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Khala Shared Memory SDK v2 - Zero-VSOCK Critical Path
+Nexus Shared Memory SDK v2 - Zero-VSOCK Critical Path
 Hybrid Access Model: mmap for control+metadata (4KB), pread/pwrite for data (4KB-2MB)
 """
 
@@ -12,7 +12,7 @@ from typing import Optional
 
 
 # Global Control Structure (128 bytes at offset 0)
-class KhalaControl(ctypes.Structure):
+class NexusControl(ctypes.Structure):
     _pack_ = 8
     _fields_ = [
         ("session_id", ctypes.c_uint32),
@@ -48,14 +48,14 @@ class MetadataRing(ctypes.Structure):
     ]
 
 
-class KhalaDevice:
+class NexusDevice:
     """
-    Khala Device with Metadata Ring Coordination.
+    Nexus Device with Metadata Ring Coordination.
     - Control + Metadata (0-4KB): Memory-mapped for atomic coordination
     - Data Region (4KB-2MB): File I/O for payload transfer
     """
     
-    DEVICE_PATH = "/dev/khala0"
+    DEVICE_PATH = "/dev/nexus0"
     TOTAL_SIZE = 2 * 1024 * 1024  # 2MB
     CONTROL_SIZE = 4096            # 4KB (128 control + 992 metadata + padding)
     DATA_OFFSET = 4096
@@ -79,7 +79,7 @@ class KhalaDevice:
     FLAG_CONSUMED = 2
     
     def __init__(self, device_path: str = DEVICE_PATH):
-        """Initialize Khala device with metadata ring."""
+        """Initialize Nexus device with metadata ring."""
         self.fd = os.open(device_path, os.O_RDWR | os.O_SYNC)
         
         # Map ONLY the control region (first 4KB)
@@ -92,7 +92,7 @@ class KhalaDevice:
         )
         
         # Overlay control structure at offset 0
-        self.ctrl = KhalaControl.from_buffer(self.mm, 0)
+        self.ctrl = NexusControl.from_buffer(self.mm, 0)
         
         # Overlay metadata ring at offset 128
         self.meta_ring = MetadataRing.from_buffer(self.mm, 128)
@@ -316,9 +316,9 @@ class KhalaDevice:
 
 if __name__ == "__main__":
     # Simple self-test
-    print("Khala Python SDK v2 (Zero-VSOCK)")
-    print(f"Control size: {KhalaDevice.CONTROL_SIZE} bytes")
-    print(f"Data capacity: {KhalaDevice.DATA_CAPACITY:,} bytes")
-    print(f"Max chunk: {KhalaDevice.MAX_CHUNK_SIZE:,} bytes")
-    print(f"Max in-flight: {KhalaDevice.MAX_INFLIGHT} messages")
-    print(f"Total size: {KhalaDevice.TOTAL_SIZE:,} bytes")
+    print("Nexus Python SDK v2 (Zero-VSOCK)")
+    print(f"Control size: {NexusDevice.CONTROL_SIZE} bytes")
+    print(f"Data capacity: {NexusDevice.DATA_CAPACITY:,} bytes")
+    print(f"Max chunk: {NexusDevice.MAX_CHUNK_SIZE:,} bytes")
+    print(f"Max in-flight: {NexusDevice.MAX_INFLIGHT} messages")
+    print(f"Total size: {NexusDevice.TOTAL_SIZE:,} bytes")

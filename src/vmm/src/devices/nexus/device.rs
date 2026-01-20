@@ -1,7 +1,7 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Khala PCI Device - Main Implementation
+//! Nexus PCI Device - Main Implementation
 
 use std::fmt::{self, Debug};
 use std::fs::{File, OpenOptions};
@@ -20,16 +20,16 @@ use crate::vstate::bus::BusDevice;
 use crate::vstate::memory::MemoryError;
 use crate::Vm;
 
-/// PCI Vendor ID for Khala device (0x1234 = Generic/QEMU)
-pub const KHALA_VENDOR_ID: u16 = 0x1234;
-/// PCI Device ID for Khala device (0x1110 = Khala Shared Memory)
-pub const KHALA_DEVICE_ID: u16 = 0x1110;
+/// PCI Vendor ID for Nexus device (0x1234 = Generic/QEMU)
+pub const NEXUS_VENDOR_ID: u16 = 0x1234;
+/// PCI Device ID for Nexus device (0x1110 = Nexus Shared Memory)
+pub const NEXUS_DEVICE_ID: u16 = 0x1110;
 /// PCI Revision ID
-pub const KHALA_REVISION_ID: u8 = 0x01;
+pub const NEXUS_REVISION_ID: u8 = 0x01;
 /// PCI Subsystem Vendor ID
-pub const KHALA_SUBSYSTEM_VENDOR_ID: u16 = 0x1234;
+pub const NEXUS_SUBSYSTEM_VENDOR_ID: u16 = 0x1234;
 /// PCI Subsystem ID
-pub const KHALA_SUBSYSTEM_ID: u16 = 0x1110;
+pub const NEXUS_SUBSYSTEM_ID: u16 = 0x1110;
 
 /// BAR 0: Shared memory region
 pub const SHMEM_BAR_INDEX: usize = 0;
@@ -44,19 +44,19 @@ pub const SHMEM_SIZE_HI_REG: u64 = 0x0C;
 pub const STATUS_READY: u32 = 0x0001;
 pub const STATUS_SHMEM_MAPPED: u32 = 0x0002;
 
-/// PCI class for Khala device (Memory Controller)
+/// PCI class for Nexus device (Memory Controller)
 #[derive(Clone, Copy, Debug)]
-pub struct KhalaPciClass;
+pub struct NexusPciClass;
 
-impl PciSubclass for KhalaPciClass {
+impl PciSubclass for NexusPciClass {
     fn get_register_value(&self) -> u8 {
         0x00 // RAM memory subclass
     }
 }
 
-/// Errors for Khala device operations
+/// Errors for Nexus device operations
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
-pub enum KhalaError {
+pub enum NexusError {
     /// Failed to open shared memory file: {0}
     OpenShmemFile(std::io::Error),
     /// Failed to get file metadata: {0}
@@ -71,23 +71,23 @@ pub enum KhalaError {
     InvalidConfig(String),
 }
 
-/// Configuration for a Khala shared memory device
+/// Configuration for a Nexus shared memory device
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KhalaConfig {
+pub struct NexusConfig {
     /// Device identifier
     pub id: String,
-    /// Path to the shared memory file (e.g., /dev/shm/khala_region)
+    /// Path to the shared memory file (e.g., /dev/shm/nexus_region)
     pub shmem_path: String,
     /// Size of the shared memory region in MiB
     pub size_mib: u64,
 }
 
-/// Khala PCI Device implementation
-pub struct KhalaPciDevice {
+/// Nexus PCI Device implementation
+pub struct NexusPciDevice {
     /// Device identifier
     pub(crate) id: String,
     /// Device configuration
-    pub(crate) config: KhalaConfig,
+    pub(crate) config: NexusConfig,
     /// PCI configuration space
     pub(crate) configuration: PciConfiguration,
     /// PCI BDF (Bus/Device/Function)
@@ -108,9 +108,9 @@ pub struct KhalaPciDevice {
     pub(crate) mmap_ptr: u64,
 }
 
-impl Debug for KhalaPciDevice {
+impl Debug for NexusPciDevice {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("KhalaPciDevice")
+        f.debug_struct("NexusPciDevice")
             .field("id", &self.id)
             .field("config", &self.config)
             .field("pci_device_bdf", &self.pci_device_bdf)
@@ -123,33 +123,33 @@ impl Debug for KhalaPciDevice {
     }
 }
 
-impl KhalaPciDevice {
-    /// Create a new Khala PCI device
+impl NexusPciDevice {
+    /// Create a new Nexus PCI device
     pub fn new(
         id: String,
-        config: KhalaConfig,
+        config: NexusConfig,
         pci_device_bdf: u32,
-    ) -> Result<Self, KhalaError> {
+    ) -> Result<Self, NexusError> {
         // Validate configuration
         if config.size_mib == 0 {
-            return Err(KhalaError::InvalidConfig(
+            return Err(NexusError::InvalidConfig(
                 "Size must be greater than 0".to_string(),
             ));
         }
 
         let shmem_size_bytes = mib_to_bytes(config.size_mib.try_into().map_err(|_| {
-            KhalaError::InvalidConfig("Size too large".to_string())
+            NexusError::InvalidConfig("Size too large".to_string())
         })?);
 
         // Create PCI configuration with interrupt pin
         let mut configuration = PciConfiguration::new_type0(
-            KHALA_VENDOR_ID,
-            KHALA_DEVICE_ID,
-            KHALA_REVISION_ID,
+            NEXUS_VENDOR_ID,
+            NEXUS_DEVICE_ID,
+            NEXUS_REVISION_ID,
             PciClassCode::MemoryController,
-            &KhalaPciClass,
-            KHALA_SUBSYSTEM_VENDOR_ID,
-            KHALA_SUBSYSTEM_ID,
+            &NexusPciClass,
+            NEXUS_SUBSYSTEM_VENDOR_ID,
+            NEXUS_SUBSYSTEM_ID,
             None, // No MSI-X
         );
 
@@ -159,11 +159,11 @@ impl KhalaPciDevice {
         configuration.set_register(15, (reg15_value & 0xFFFF_00FF) | (int_pin << 8));
 
         debug!(
-            "Creating Khala device '{}' with {} MiB shared memory at {}, INT#A assigned",
+            "Creating Nexus device '{}' with {} MiB shared memory at {}, INT#A assigned",
             id, config.size_mib, config.shmem_path
         );
 
-        Ok(KhalaPciDevice {
+        Ok(NexusPciDevice {
             id,
             config,
             configuration,
@@ -182,7 +182,7 @@ impl KhalaPciDevice {
     pub fn allocate_bars(
         &mut self,
         mmio64_allocator: &mut vm_allocator::AddressAllocator,
-    ) -> Result<(), KhalaError> {
+    ) -> Result<(), NexusError> {
         use vm_allocator::AllocPolicy;
 
         let shmem_alignment = self.shmem_size_bytes.max(0x1000);
@@ -193,7 +193,7 @@ impl KhalaPciDevice {
                 AllocPolicy::FirstMatch,
             )
             .map_err(|e| {
-                KhalaError::InvalidConfig(format!("Failed to allocate shared memory BAR: {}", e))
+                NexusError::InvalidConfig(format!("Failed to allocate shared memory BAR: {}", e))
             })?
             .start();
 
@@ -204,7 +204,7 @@ impl KhalaPciDevice {
             .add_pci_bar(SHMEM_BAR_INDEX, shmem_bar_addr, self.shmem_size_bytes);
 
         debug!(
-            "Allocated Khala shared memory BAR 0 at {:#x}, size {:#x}",
+            "Allocated Nexus shared memory BAR 0 at {:#x}, size {:#x}",
             shmem_bar_addr, self.shmem_size_bytes
         );
 
@@ -212,22 +212,22 @@ impl KhalaPciDevice {
     }
 
     /// Map backing file into memory (adapted from pmem)
-    fn mmap_backing_file(&mut self) -> Result<(), KhalaError> {
+    fn mmap_backing_file(&mut self) -> Result<(), NexusError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&self.config.shmem_path)
-            .map_err(KhalaError::OpenShmemFile)?;
+            .map_err(NexusError::OpenShmemFile)?;
 
         let file_len = file.metadata()
-            .map_err(KhalaError::FileMetadata)?
+            .map_err(NexusError::FileMetadata)?
             .len();
 
         if file_len == 0 {
-            return Err(KhalaError::InvalidConfig("Backing file size is 0".to_string()));
+            return Err(NexusError::InvalidConfig("Backing file size is 0".to_string()));
         }
         if file_len != self.shmem_size_bytes {
-            return Err(KhalaError::SizeMismatch {
+            return Err(NexusError::SizeMismatch {
                 expected: self.shmem_size_bytes,
                 actual: file_len,
             });
@@ -249,7 +249,7 @@ impl KhalaPciDevice {
         };
 
         if mmap_ptr == libc::MAP_FAILED {
-            return Err(KhalaError::InvalidConfig(
+            return Err(NexusError::InvalidConfig(
                 format!("Failed to mmap shared memory file: {}", 
                     std::io::Error::last_os_error())
             ));
@@ -260,7 +260,7 @@ impl KhalaPciDevice {
         self.mmap_ptr = mmap_ptr as u64;
 
         debug!(
-            "mmapped Khala backing file '{}' ({} bytes) at userspace_addr {:#x}",
+            "mmapped Nexus backing file '{}' ({} bytes) at userspace_addr {:#x}",
             self.config.shmem_path, file_len, self.mmap_ptr
         );
 
@@ -268,13 +268,13 @@ impl KhalaPciDevice {
     }
 
     /// Map the shared memory file into guest address space
-    pub fn map_shared_memory(&mut self, vm: &Vm) -> Result<(), KhalaError> {
+    pub fn map_shared_memory(&mut self, vm: &Vm) -> Result<(), NexusError> {
         // First, mmap the backing file
         self.mmap_backing_file()?;
 
         // Get KVM slot
         let slot = vm.next_kvm_slot(1)
-            .ok_or_else(|| KhalaError::InvalidConfig("No KVM slot available".to_string()))?;
+            .ok_or_else(|| NexusError::InvalidConfig("No KVM slot available".to_string()))?;
 
         // Register with KVM
         let kvm_region = kvm_userspace_memory_region {
@@ -286,10 +286,10 @@ impl KhalaPciDevice {
         };
 
         vm.set_user_memory_region(kvm_region)
-            .map_err(|e| KhalaError::InvalidConfig(format!("Failed to register KVM memory region: {}", e)))?;
+            .map_err(|e| NexusError::InvalidConfig(format!("Failed to register KVM memory region: {}", e)))?;
 
         debug!(
-            "Registered Khala shared memory with KVM: guest_phys_addr={:#x}, size={:#x}, slot={}, userspace_addr={:#x}",
+            "Registered Nexus shared memory with KVM: guest_phys_addr={:#x}, size={:#x}, slot={}, userspace_addr={:#x}",
             self.shmem_guest_addr, self.shmem_size_bytes, slot, self.mmap_ptr
         );
 
@@ -302,7 +302,7 @@ impl KhalaPciDevice {
     }
 
     /// Get device configuration
-    pub fn config(&self) -> &KhalaConfig {
+    pub fn config(&self) -> &NexusConfig {
         &self.config
     }
 
@@ -312,7 +312,7 @@ impl KhalaPciDevice {
     }
 }
 
-impl PciDevice for KhalaPciDevice {
+impl PciDevice for NexusPciDevice {
     fn write_config_register(
         &mut self,
         reg_idx: usize,
@@ -337,10 +337,10 @@ impl PciDevice for KhalaPciDevice {
 
     fn move_bar(&mut self, old_base: u64, new_base: u64) -> Result<(), DeviceRelocationError> {
         if self.shmem_bar_addr == old_base {
-            debug!("Khala: Moving BAR from {:#x} to {:#x}", old_base, new_base);
+            debug!("Nexus: Moving BAR from {:#x} to {:#x}", old_base, new_base);
             self.shmem_bar_addr = new_base;
             self.shmem_guest_addr = new_base;
-            error!("Khala: BAR relocation after mapping is not supported");
+            error!("Nexus: BAR relocation after mapping is not supported");
         }
         Ok(())
     }
@@ -348,7 +348,7 @@ impl PciDevice for KhalaPciDevice {
     fn read_bar(&mut self, base: u64, offset: u64, data: &mut [u8]) {
         if base == self.shmem_bar_addr {
             // Handled by KVM EPT - shouldn't be called
-            debug!("Khala: Unexpected read_bar at offset {:#x}", offset);
+            debug!("Nexus: Unexpected read_bar at offset {:#x}", offset);
         }
     }
 
@@ -360,7 +360,7 @@ impl PciDevice for KhalaPciDevice {
     }
 }
 
-impl BusDevice for KhalaPciDevice {
+impl BusDevice for NexusPciDevice {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
         self.read_bar(base, offset, data);
     }

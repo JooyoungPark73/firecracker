@@ -1,7 +1,7 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Khala Shared Memory PCI Device
+//! Nexus Shared Memory PCI Device
 //!
 //! This module implements a custom PCI device that exposes a shared memory region
 //! from the host to the guest VM for zero-copy communication.
@@ -20,6 +20,6 @@ pub mod device;
 pub mod metrics;
 pub mod persist;
 
-pub use device::{KhalaConfig, KhalaError, KhalaPciDevice};
-pub use metrics::KhalaMetrics;
-pub use persist::{KhalaPciDeviceState, KhalaPersistError};
+pub use device::{NexusConfig, NexusError, NexusPciDevice};
+pub use metrics::NexusMetrics;
+pub use persist::{NexusPciDeviceState, NexusPersistError};

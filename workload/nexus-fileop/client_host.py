@@ -30,7 +30,7 @@ def write_file_message(sock, fd, data):
     sock.sendall(struct.pack('!I', len(data)))
 
 
-def run_benchmark(mmap_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v.sock", 
+def run_benchmark(mmap_path='/dev/shm/nexus_region', vsock_socket_path="/tmp/v.sock", 
                  payload_sizes=None, iterations=10, output_csv='benchmark_results.csv'):
     """
     Run E2E latency benchmark for mmap-based communication.
@@ -195,7 +195,7 @@ def run_benchmark(mmap_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v.s
 
 if __name__ == "__main__":
     run_benchmark(
-        mmap_path='/dev/shm/khala_region',
+        mmap_path='/dev/shm/nexus_region',
         vsock_socket_path='/tmp/v.sock',
         # 16B to 16MB in power of 2 steps
         payload_sizes=[2**x for x in range(4, 25)],

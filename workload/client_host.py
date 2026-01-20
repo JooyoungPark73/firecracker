@@ -86,7 +86,7 @@ def write_mmap_message(sock, mm, data):
 # Example main_mmap function
 # Usage: create a file (e.g. mmapfile.bin) of sufficient size (e.g. 1MB), then run main_mmap('mmapfile.bin')
 
-def main_mmap(mmap_path='/dev/shm/khala_region', mmap_size=16*1024*1024):
+def main_mmap(mmap_path='/dev/shm/nexus_region', mmap_size=16*1024*1024):
     
     f = os.open(mmap_path, os.O_RDWR)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -156,7 +156,7 @@ def write_message(conn, data):
     conn.sendall(struct.pack('!I', length))
     conn.sendall(data) 
 
-def main_benchmark(mmap_path='/dev/shm/khala_region', mmap_size=16*1024*1024, num_iterations=10):
+def main_benchmark(mmap_path='/dev/shm/nexus_region', mmap_size=16*1024*1024, num_iterations=10):
     import hashlib
     import statistics
     

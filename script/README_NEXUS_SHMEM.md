@@ -1,17 +1,17 @@
-# Khala Shared Memory Device - Testing Guide
+# Nexus Shared Memory Device - Testing Guide
 
-This directory contains scripts and test programs for the Khala shared memory device.
+This directory contains scripts and test programs for the Nexus shared memory device.
 
 ## Overview
 
-Khala is a custom **PCI device** that provides zero-copy shared memory communication between the Firecracker host and guest VM.
+Nexus is a custom **PCI device** that provides zero-copy shared memory communication between the Firecracker host and guest VM.
 
 **Implementation Approach:**
-- **PCI Device Emulation**: Khala is implemented as a PCI device in Firecracker (not a kernel module)
+- **PCI Device Emulation**: Nexus is implemented as a PCI device in Firecracker (not a kernel module)
 - **Driver**: Uses standard Linux `uio_pci_generic` driver (no custom kernel driver needed)
 - **Memory Mapping**: Shared memory is mapped via KVM into guest address space through PCI BARs
 
-**Note:** If you see kernel messages like `khala_shmem: missing khala_shmem= cmdline`, this indicates an old kernel driver approach. The current implementation does **NOT** require kernel parameters or custom drivers.
+**Note:** If you see kernel messages like `nexus_shmem: missing nexus_shmem= cmdline`, this indicates an old kernel driver approach. The current implementation does **NOT** require kernel parameters or custom drivers.
 
 **Key Features:****
 - Custom PCI device (Vendor: 0x1234, Device: 0xDEAD)
@@ -34,7 +34,7 @@ Khala is a custom **PCI device** that provides zero-copy shared memory communica
          │
 ┌────────▼────────┐
 │  Firecracker    │
-│  Khala Device   │
+│  Nexus Device   │
 │  (PCI 1234:dead)│
 └────────┬────────┘
          │
@@ -52,18 +52,18 @@ Khala is a custom **PCI device** that provides zero-copy shared memory communica
 ## Files
 
 ### Scripts
-- **`setup_khala_shmem.sh`** - Creates and initializes the shared memory file
-- **`boot_fc.sh`** - Updated to configure Khala device via API
+- **`setup_nexus_shmem.sh`** - Creates and initializes the shared memory file
+- **`boot_fc.sh`** - Updated to configure Nexus device via API
 - **`start_fs_bin.sh`** - Starts Firecracker with PCI support
-- **`test_khala.sh`** - Interactive test script
+- **`test_nexus.sh`** - Interactive test script
 
 ### Test Programs
-- **`khala_host_client.py`** - Host-side Python client (sends requests)
-- **`khala_guest_server.py`** - Guest-side Python server (handles requests)
+- **`nexus_host_client.py`** - Host-side Python client (sends requests)
+- **`nexus_guest_server.py`** - Guest-side Python server (handles requests)
 
 ## Quick Start
 
-### 1. Build Firecracker with Khala Support
+### 1. Build Firecracker with Nexus Support
 
 ```bash
 cd /users/nehalem/firecracker
@@ -73,10 +73,10 @@ cd /users/nehalem/firecracker
 ### 2. Setup Shared Memory
 
 ```bash
-bash script/setup_khala_shmem.sh
+bash script/setup_nexus_shmem.sh
 ```
 
-This creates `/dev/shm/khala_region` (16MB)
+This creates `/dev/shm/nexus_region` (16MB)
 
 ### 3. Start Firecracker
 
@@ -93,11 +93,11 @@ bash script/boot_fc.sh
 The boot script now includes:
 ```bash
 sudo curl --unix-socket /tmp/firecracker.socket -i \
-    -X PUT 'http://localhost/khala/khala0' \
+    -X PUT 'http://localhost/nexus/nexus0' \
     -H 'Content-Type: application/json' \
     -d '{
-         "id": "khala0",
-         "shmem_path": "/dev/shm/khala_region",
+         "id": "nexus0",
+         "shmem_path": "/dev/shm/nexus_region",
          "size_mib": 16
     }'
 ```
@@ -106,13 +106,13 @@ sudo curl --unix-socket /tmp/firecracker.socket -i \
 
 Terminal 3:
 ```bash
-python3 script/khala_host_client.py
+python3 script/nexus_host_client.py
 ```
 
 Expected output:
 ```
-[Host] Khala Shared Memory Client
-[Host] Opening shared memory: /dev/shm/khala_region
+[Host] Nexus Shared Memory Client
+[Host] Opening shared memory: /dev/shm/nexus_region
 [Host] Shared memory mapped successfully (16777216 bytes)
 [Host] Waiting for guest server to be ready...
 ```
@@ -125,13 +125,13 @@ First, copy the guest server to the VM (via network, vsock, or build it into the
 
 Then run:
 ```bash
-python3 khala_guest_server.py
+python3 nexus_guest_server.py
 ```
 
 Expected output:
 ```
-[Guest] Khala Shared Memory Server
-[Guest] Found Khala device: 0000:00:02.0
+[Guest] Nexus Shared Memory Server
+[Guest] Found Nexus device: 0000:00:02.0
 [Guest]   Vendor: 0x1234, Device: 0xdead
 [Guest]   UIO device: /dev/uio0
 [Guest] Shared memory mapped successfully!
@@ -199,22 +199,22 @@ Shared Memory Size: 16777216 bytes
 **Problem:** "Shared memory file not found"
 ```bash
 # Solution: Run setup script
-bash script/setup_khala_shmem.sh
+bash script/setup_nexus_shmem.sh
 ```
 
 **Problem:** "Permission denied" when accessing shared memory
 ```bash
 # Solution: Check permissions
-ls -la /dev/shm/khala_region
+ls -la /dev/shm/nexus_region
 # Should be: -rw-rw-rw- (666)
 
 # Fix if needed:
-sudo chmod 666 /dev/shm/khala_region
+sudo chmod 666 /dev/shm/nexus_region
 ```
 
 ### Guest Issues
 
-**Problem:** "Khala device not found"
+**Problem:** "Nexus device not found"
 ```bash
 # Check if PCI is enabled in Firecracker
 # start_fs_bin.sh should have: --enable-pci
@@ -247,15 +247,15 @@ ls -la /sys/bus/pci/devices/0000:00:02.0/resource*
 
 ## API Configuration
 
-The Khala device can be configured via the Firecracker API:
+The Nexus device can be configured via the Firecracker API:
 
-**PUT /khala/{id}**
+**PUT /nexus/{id}**
 
 Request body:
 ```json
 {
-  "id": "khala0",
-  "shmem_path": "/dev/shm/khala_region",
+  "id": "nexus0",
+  "shmem_path": "/dev/shm/nexus_region",
   "size_mib": 16
 }
 ```

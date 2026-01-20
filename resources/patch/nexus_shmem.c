@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Khala PCI Shared Memory Driver (Benchmark Edition)
+ * Nexus PCI Shared Memory Driver (Benchmark Edition)
  *
  * Capabilities:
- * 1. /dev/khalaX read/write: Zero-Copy, Uncached (Write-Combining) -> Low Latency.
- * 2. /dev/khalaX mmap: Zero-Copy, Cached (Write-Back) -> High Throughput.
+ * 1. /dev/nexusX read/write: Zero-Copy, Uncached (Write-Combining) -> Low Latency.
+ * 2. /dev/nexusX mmap: Zero-Copy, Cached (Write-Back) -> High Throughput.
  * 3. Restore-Aware: Automatically warms up EPT on snapshot restore.
  */
 
@@ -22,18 +22,18 @@
 #include <acpi/acpi_bus.h>
 #include <linux/mm.h>
 
-#define DRIVER_NAME "khala"
+#define DRIVER_NAME "nexus"
 #define MAX_DEVICES 32
 #define VMGENID_HID "FCVMGID"
 
-static dev_t khala_base_dev;
-static struct class *khala_class;
-static DEFINE_IDA(khala_dev_ids);
-static LIST_HEAD(khala_dev_list);
-static DEFINE_SPINLOCK(khala_dev_lock);
+static dev_t nexus_base_dev;
+static struct class *nexus_class;
+static DEFINE_IDA(nexus_dev_ids);
+static LIST_HEAD(nexus_dev_list);
+static DEFINE_SPINLOCK(nexus_dev_lock);
 static acpi_handle vmgenid_handle = NULL;
 
-struct khala_dev {
+struct nexus_dev {
     struct pci_dev *pdev;
     void __iomem *bar_base;     /* WC Mapping for read/write */
     resource_size_t bar_phys;   /* Physical Address for mmap */
@@ -44,17 +44,17 @@ struct khala_dev {
 };
 
 /* --- ACPI Restore Handler --- */
-static void khala_acpi_notify(acpi_handle handle, u32 event, void *data)
+static void nexus_acpi_notify(acpi_handle handle, u32 event, void *data)
 {
-    struct khala_dev *dev;
+    struct nexus_dev *dev;
     unsigned long offset;
     volatile u8 dummy;
 
     if (event != 0x80) return;
 
     rcu_read_lock();
-    list_for_each_entry_rcu(dev, &khala_dev_list, node) {
-        pr_info("khala%d: Restore Detected! Warming up...\n", dev->id);
+    list_for_each_entry_rcu(dev, &nexus_dev_list, node) {
+        pr_info("nexus%d: Restore Detected! Warming up...\n", dev->id);
         for (offset = 0; offset < dev->bar_len; offset += 4096) {
             dummy = ioread8(dev->bar_base + offset);
         }
@@ -64,9 +64,9 @@ static void khala_acpi_notify(acpi_handle handle, u32 event, void *data)
 
 /* --- File Operations --- */
 
-static int khala_open(struct inode *inode, struct file *filp)
+static int nexus_open(struct inode *inode, struct file *filp)
 {
-    struct khala_dev *dev = container_of(inode->i_cdev, struct khala_dev, cdev);
+    struct nexus_dev *dev = container_of(inode->i_cdev, struct nexus_dev, cdev);
     filp->private_data = dev;
     return 0;
 }
@@ -74,10 +74,10 @@ static int khala_open(struct inode *inode, struct file *filp)
 /* * READ/WRITE: Uses ioremap_wc (Uncached/Write-Combining).
  * Best for: Single-shot latency, writing to host.
  */
-static ssize_t khala_read(struct file *filp, char __user *buf, 
+static ssize_t nexus_read(struct file *filp, char __user *buf, 
                           size_t count, loff_t *f_pos)
 {
-    struct khala_dev *dev = filp->private_data;
+    struct nexus_dev *dev = filp->private_data;
     size_t remain = dev->bar_len - *f_pos;
     size_t to_copy = min(count, remain);
 
@@ -88,10 +88,10 @@ static ssize_t khala_read(struct file *filp, char __user *buf,
     return to_copy;
 }
 
-static ssize_t khala_write(struct file *filp, const char __user *buf, 
+static ssize_t nexus_write(struct file *filp, const char __user *buf, 
                            size_t count, loff_t *f_pos)
 {
-    struct khala_dev *dev = filp->private_data;
+    struct nexus_dev *dev = filp->private_data;
     size_t remain = dev->bar_len - *f_pos;
     size_t to_copy = min(count, remain);
 
@@ -106,16 +106,16 @@ static ssize_t khala_write(struct file *filp, const char __user *buf,
  * MMAP: Uses remap_pfn_range (Cached/Write-Back).
  * Best for: Throughput, repeated access, random access.
  */
-static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
+static int nexus_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-    struct khala_dev *dev = filp->private_data;
+    struct nexus_dev *dev = filp->private_data;
     unsigned long size = vma->vm_end - vma->vm_start;
     unsigned long pfn;
     int ret;
 
     /* Check bounds against PCI BAR size */
     if (size > dev->bar_len) {
-        pr_err("khala%d: mmap request exceeds BAR size\n", dev->id);
+        pr_err("nexus%d: mmap request exceeds BAR size\n", dev->id);
         return -EINVAL;
     }
 
@@ -131,16 +131,16 @@ static int khala_mmap(struct file *filp, struct vm_area_struct *vma)
 
     ret = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
     if (ret) {
-        pr_err("khala%d: remap_pfn_range failed: %d\n", dev->id, ret);
+        pr_err("nexus%d: remap_pfn_range failed: %d\n", dev->id, ret);
         return ret;
     }
 
     return 0;
 }
 
-static loff_t khala_llseek(struct file *filp, loff_t offset, int whence)
+static loff_t nexus_llseek(struct file *filp, loff_t offset, int whence)
 {
-    struct khala_dev *dev = filp->private_data;
+    struct nexus_dev *dev = filp->private_data;
     loff_t newpos;
     switch (whence) {
         case SEEK_SET: newpos = offset; break;
@@ -153,21 +153,21 @@ static loff_t khala_llseek(struct file *filp, loff_t offset, int whence)
     return newpos;
 }
 
-static const struct file_operations khala_fops = {
+static const struct file_operations nexus_fops = {
     .owner = THIS_MODULE,
-    .open = khala_open,
-    .read = khala_read,
-    .write = khala_write,
-    .mmap = khala_mmap,
-    .llseek = khala_llseek,
+    .open = nexus_open,
+    .read = nexus_read,
+    .write = nexus_write,
+    .mmap = nexus_mmap,
+    .llseek = nexus_llseek,
 };
 
 /* --- PCI Lifecycle --- */
 
-static int khala_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+static int nexus_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
     int ret;
-    struct khala_dev *dev;
+    struct nexus_dev *dev;
     struct device *device_node;
 
     ret = pci_enable_device(pdev);
@@ -182,7 +182,7 @@ static int khala_probe(struct pci_dev *pdev, const struct pci_device_id *id)
         goto err_regions;
     }
     dev->pdev = pdev;
-    dev->id = ida_alloc(&khala_dev_ids, GFP_KERNEL);
+    dev->id = ida_alloc(&nexus_dev_ids, GFP_KERNEL);
     if (dev->id < 0) {
         ret = dev->id;
         goto err_kfree;
@@ -203,39 +203,39 @@ static int khala_probe(struct pci_dev *pdev, const struct pci_device_id *id)
     {
         unsigned long off; 
         volatile u8 d;
-        pr_info("khala%d: Boot-time warmup (%llu MB)...\n", dev->id, dev->bar_len >> 20);
+        pr_info("nexus%d: Boot-time warmup (%llu MB)...\n", dev->id, dev->bar_len >> 20);
         for(off = 0; off < dev->bar_len; off += 4096) d = ioread8(dev->bar_base + off);
     }
 
     /* Register */
-    spin_lock(&khala_dev_lock);
-    list_add_rcu(&dev->node, &khala_dev_list);
-    spin_unlock(&khala_dev_lock);
+    spin_lock(&nexus_dev_lock);
+    list_add_rcu(&dev->node, &nexus_dev_list);
+    spin_unlock(&nexus_dev_lock);
 
-    cdev_init(&dev->cdev, &khala_fops);
+    cdev_init(&dev->cdev, &nexus_fops);
     dev->cdev.owner = THIS_MODULE;
-    ret = cdev_add(&dev->cdev, khala_base_dev + dev->id, 1);
+    ret = cdev_add(&dev->cdev, nexus_base_dev + dev->id, 1);
     if (ret) goto err_list_del;
 
-    device_node = device_create(khala_class, &pdev->dev, 
-                                khala_base_dev + dev->id, NULL, "khala%d", dev->id);
+    device_node = device_create(nexus_class, &pdev->dev, 
+                                nexus_base_dev + dev->id, NULL, "nexus%d", dev->id);
     if (IS_ERR(device_node)) {
         ret = PTR_ERR(device_node);
         goto err_cdev;
     }
 
     pci_set_drvdata(pdev, dev);
-    pr_info("khala: Device /dev/khala%d attached.\n", dev->id);
+    pr_info("nexus: Device /dev/nexus%d attached.\n", dev->id);
     return 0;
 
 err_cdev:
     cdev_del(&dev->cdev);
 err_list_del:
-    spin_lock(&khala_dev_lock);
+    spin_lock(&nexus_dev_lock);
     list_del_rcu(&dev->node);
-    spin_unlock(&khala_dev_lock);
+    spin_unlock(&nexus_dev_lock);
 err_ida:
-    ida_free(&khala_dev_ids, dev->id);
+    ida_free(&nexus_dev_ids, dev->id);
 err_kfree:
     kfree(dev);
 err_regions:
@@ -245,17 +245,17 @@ err_disable:
     return ret;
 }
 
-static void khala_remove(struct pci_dev *pdev)
+static void nexus_remove(struct pci_dev *pdev)
 {
-    struct khala_dev *dev = pci_get_drvdata(pdev);
-    spin_lock(&khala_dev_lock);
+    struct nexus_dev *dev = pci_get_drvdata(pdev);
+    spin_lock(&nexus_dev_lock);
     list_del_rcu(&dev->node);
-    spin_unlock(&khala_dev_lock);
+    spin_unlock(&nexus_dev_lock);
     synchronize_rcu();
 
-    device_destroy(khala_class, khala_base_dev + dev->id);
+    device_destroy(nexus_class, nexus_base_dev + dev->id);
     cdev_del(&dev->cdev);
-    ida_free(&khala_dev_ids, dev->id);
+    ida_free(&nexus_dev_ids, dev->id);
     pci_release_regions(pdev);
     pci_disable_device(pdev);
     kfree(dev);
@@ -263,49 +263,49 @@ static void khala_remove(struct pci_dev *pdev)
 
 /* --- Init/Exit --- */
 
-static const struct pci_device_id khala_ids[] = { { PCI_DEVICE(0x1234, 0x1110) }, { 0, } };
-MODULE_DEVICE_TABLE(pci, khala_ids);
-static struct pci_driver khala_driver = {
+static const struct pci_device_id nexus_ids[] = { { PCI_DEVICE(0x1234, 0x1110) }, { 0, } };
+MODULE_DEVICE_TABLE(pci, nexus_ids);
+static struct pci_driver nexus_driver = {
     .name = DRIVER_NAME,
-    .id_table = khala_ids,
-    .probe = khala_probe,
-    .remove = khala_remove,
+    .id_table = nexus_ids,
+    .probe = nexus_probe,
+    .remove = nexus_remove,
 };
 
-static acpi_status khala_find_vmgenid_cb(acpi_handle handle, u32 lvl, void *context, void **rv)
+static acpi_status nexus_find_vmgenid_cb(acpi_handle handle, u32 lvl, void *context, void **rv)
 {
     struct acpi_device_info *info;
     if (ACPI_FAILURE(acpi_get_object_info(handle, &info))) return AE_OK;
     if (info->valid & ACPI_VALID_HID && !strcmp(info->hardware_id.string, VMGENID_HID)) {
-        pr_info("khala: Found VMGenID. Hooking restore events.\n");
+        pr_info("nexus: Found VMGenID. Hooking restore events.\n");
         vmgenid_handle = handle;
-        acpi_install_notify_handler(handle, ACPI_DEVICE_NOTIFY, khala_acpi_notify, NULL);
+        acpi_install_notify_handler(handle, ACPI_DEVICE_NOTIFY, nexus_acpi_notify, NULL);
     }
     kfree(info);
     return AE_OK;
 }
 
-static int __init khala_init(void)
+static int __init nexus_init(void)
 {
-    int ret = alloc_chrdev_region(&khala_base_dev, 0, MAX_DEVICES, DRIVER_NAME);
+    int ret = alloc_chrdev_region(&nexus_base_dev, 0, MAX_DEVICES, DRIVER_NAME);
     if (ret) return ret;
-    khala_class = class_create(THIS_MODULE, DRIVER_NAME);
+    nexus_class = class_create(THIS_MODULE, DRIVER_NAME);
     
     /* Hook ACPI */
     acpi_walk_namespace(ACPI_TYPE_DEVICE, ACPI_ROOT_OBJECT, ACPI_UINT32_MAX, 
-                        khala_find_vmgenid_cb, NULL, NULL, NULL);
-    return pci_register_driver(&khala_driver);
+                        nexus_find_vmgenid_cb, NULL, NULL, NULL);
+    return pci_register_driver(&nexus_driver);
 }
 
-static void __exit khala_exit(void)
+static void __exit nexus_exit(void)
 {
-    if (vmgenid_handle) acpi_remove_notify_handler(vmgenid_handle, ACPI_DEVICE_NOTIFY, khala_acpi_notify);
-    pci_unregister_driver(&khala_driver);
-    class_destroy(khala_class);
-    unregister_chrdev_region(khala_base_dev, MAX_DEVICES);
-    ida_destroy(&khala_dev_ids);
+    if (vmgenid_handle) acpi_remove_notify_handler(vmgenid_handle, ACPI_DEVICE_NOTIFY, nexus_acpi_notify);
+    pci_unregister_driver(&nexus_driver);
+    class_destroy(nexus_class);
+    unregister_chrdev_region(nexus_base_dev, MAX_DEVICES);
+    ida_destroy(&nexus_dev_ids);
 }
 
-module_init(khala_init);
-module_exit(khala_exit);
+module_init(nexus_init);
+module_exit(nexus_exit);
 MODULE_LICENSE("GPL");

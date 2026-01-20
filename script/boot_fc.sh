@@ -47,17 +47,17 @@ sudo curl -X PUT --unix-socket "${API_SOCKET}" \
     }" \
     "http://localhost/logger"
 
-# Create Khala shared memory file
-echo "Setting up Khala shared memory..."
-sudo rm -f /dev/shm/khala_region
+# Create Nexus shared memory file
+echo "Setting up Nexus shared memory..."
+sudo rm -f /dev/shm/nexus_region
 python3 -c "
 import os
-SHMEM_PATH = '/dev/shm/khala_region'
+SHMEM_PATH = '/dev/shm/nexus_region'
 SHMEM_SIZE = 16 * 1024 * 1024  # 16 MB
 with open(SHMEM_PATH, 'wb') as f:
     f.write(b'\\x00' * SHMEM_SIZE)
 os.chmod(SHMEM_PATH, 0o666)
-print(f'Created Khala shared memory: {SHMEM_PATH}')
+print(f'Created Nexus shared memory: {SHMEM_PATH}')
 "
 
 # # Create pmem shared memory file
@@ -66,15 +66,15 @@ print(f'Created Khala shared memory: {SHMEM_PATH}')
 # # sudo mkfs.xfs /tmp/firecracker-pmem
 # sudo chmod 666 /tmp/firecracker-pmem
 
-# Set Khala shared memory device (NEW!)
-echo "Configuring Khala shared memory device..."
+# Set Nexus shared memory device (NEW!)
+echo "Configuring Nexus shared memory device..."
 sudo curl --unix-socket "${API_SOCKET}" -i \
-    -X PUT 'http://localhost/khala/khala0' \
+    -X PUT 'http://localhost/nexus/nexus0' \
     -H 'Accept: application/json' \
     -H 'Content-Type: application/json' \
     -d "{
-         \"id\": \"khala0\",
-         \"shmem_path\": \"/dev/shm/khala_region\",
+         \"id\": \"nexus0\",
+         \"shmem_path\": \"/dev/shm/nexus_region\",
          \"size_mib\": 16
     }"
 

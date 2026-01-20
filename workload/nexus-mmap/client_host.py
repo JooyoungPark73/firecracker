@@ -1,44 +1,59 @@
-#!/usr/bin/env python3
-"""
-Host-side client for ring buffer benchmark using Khala SDK
-"""
-
-import os
-import sys
 import socket
 import time
+import mmap
+import os
 import struct
 import hashlib
 import csv
 from datetime import datetime
 
-# Add current directory to path to import khala
-sys.path.insert(0, os.path.dirname(__file__))
-from khala import KhalaDevice
-
 AF_VSOCK = 40
 PORT = 9000
+MMAP_SIZE = 16 * 1024 * 1024  # Fixed 16MB
 
-def recv_exact(sock, n):
-    """Helper to ensure we receive exactly n bytes."""
-    data = b''
-    while len(data) < n:
-        chunk = sock.recv(n - len(data))
-        if not chunk:
-            raise ConnectionError(f"Socket closed. Expected {n} bytes, got {len(data)}")
-        data += chunk
+def read_file_message(sock, fd):
+    """Read message from file after receiving length via socket."""
+    raw_len = sock.recv(4)
+    if not raw_len or len(raw_len) < 4:
+        return None
+    msg_len = struct.unpack('!I', raw_len)[0]
+    # Read from file at offset 0
+    data = os.pread(fd, msg_len, 0)
+    if len(data) < msg_len:
+        return None
     return data
 
-def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v.sock", 
+def write_file_message(sock, fd, data):
+    """Write message to file and send length via socket."""
+    # Write to file at offset 0
+    os.pwrite(fd, data, 0)
+    sock.sendall(struct.pack('!I', len(data)))
+
+
+def run_benchmark(mmap_path='/dev/shm/nexus_region', vsock_socket_path="/tmp/v.sock", 
                  payload_sizes=None, iterations=10, output_csv='benchmark_results.csv'):
+    """
+    Run E2E latency benchmark for mmap-based communication.
     
+    Args:
+        mmap_path: Path to shared memory device
+        vsock_socket_path: Path to vsock Unix socket
+        payload_sizes: List of payload sizes to test (in bytes)
+        iterations: Number of iterations per payload size
+        output_csv: Output CSV file path
+    """
     if payload_sizes is None:
-        payload_sizes = [16, 1024, 64*1024, 256*1024, 1024*1024]
+        payload_sizes = [10, 10*1024, 1024*1024, 10*1024*1024]
     
-    print(f"Khala Ring Buffer Benchmark (Host)")
-    print(f"Testing sizes: {[f'{s:,}' for s in payload_sizes]} bytes")
+    # Open shared memory file once
+    f = os.open(mmap_path, os.O_RDWR)
+    
+    print(f"Testing payload sizes: {[f'{s:,}' for s in payload_sizes]} bytes")
+    print(f"Iterations per size: {iterations}")
+    print(f"Output file: {output_csv}")
     print("="*80)
     
+    # Prepare CSV file
     csv_file = open(output_csv, 'w', newline='')
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(['timestamp', 'payload_size_bytes', 'iteration', 'direction', 
@@ -50,73 +65,74 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
         for payload_size in payload_sizes:
             print(f"\nTesting payload size: {payload_size:,} bytes")
             
+            # Create new connection for each payload size
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.connect(vsock_socket_path)
             
-            # 1. Handshake
-            sock.sendall(f"CONNECT {PORT}\n".encode('ascii'))
+            # Send CONNECT command
+            connect_cmd = f"CONNECT {PORT}\n"
+            sock.sendall(connect_cmd.encode('ascii'))
             
-            # Robust read until newline for OK
+            # Read acknowledgement
             response = b""
             while b'\n' not in response:
-                response += sock.recv(1024)
-            if not response.strip().startswith(b"OK"):
-                raise Exception("Server refused connection")
+                chunk = sock.recv(1024)
+                if not chunk:
+                    raise Exception("Connection closed before receiving OK")
+                response += chunk
             
-            # 2. Send Config
+            response_str = response.decode('ascii').strip()
+            if not response_str.startswith("OK"):
+                raise Exception(f"Expected OK response, got: {response_str}")
+            
+            # Send test configuration to server
             config_data = struct.pack('!Q', payload_size) + struct.pack('!I', iterations)
             sock.sendall(config_data)
             
-            # 3. Setup Device & Session (CLIENT IS AUTHORITY)
-            dev = KhalaDevice(device_path)
-            
-            # RESET: Zero out pointers before starting
-            session_id = int(time.time()) & 0xFFFFFFFF
-            dev.reset_session(session_id, KhalaDevice.DIR_H2G)
-            
-            # Wait for Server to be ready (optional sync, but good practice)
-            # We use the first MD5 read as the sync point.
-
             for i in range(iterations):
                 timestamp = datetime.now().isoformat()
                 
-                # --- PHASE 1: Host -> Guest ---
+                # --- Host -> Guest ---
+                # Generate data and MD5 outside timing region
                 host_data = os.urandom(payload_size)
                 host_md5 = hashlib.md5(host_data).hexdigest()
                 
                 # Send MD5 to guest
                 sock.sendall(host_md5.encode('ascii'))
                 
-                # E2E timing: push to ring buffer + wait for guest acknowledgement
+                # E2E timing: write to mmap + wait for guest acknowledgement
                 start_time = time.time_ns()
-                
-                if not dev.push(host_data, timeout=10.0):
-                    raise TimeoutError("Push timeout")
-                
-                ack = recv_exact(sock, 1)  # Wait for guest read acknowledgement
+                write_file_message(sock, f, host_data)
+                ack = sock.recv(1)  # Wait for guest read acknowledgement
                 end_time = time.time_ns()
                 
                 h_to_g_latency = (end_time - start_time) // 1000  # Convert to microseconds
                 
                 # Receive guest's H->G timing
-                guest_timing_data = recv_exact(sock, 8)
+                guest_timing_data = sock.recv(8)
+                if len(guest_timing_data) != 8:
+                    print(f"  Error: Failed to receive guest timing at iteration {i}")
+                    break
                 guest_h_to_g_latency = struct.unpack('!Q', guest_timing_data)[0]
                 
                 # Receive verification result (outside timing)
-                verification = recv_exact(sock, 1)
+                verification = sock.recv(1)
                 h_to_g_verified = (verification == b'1')
                 
                 # Log H->G result (using host measurement)
                 csv_writer.writerow([timestamp, payload_size, i, 'H->G', 
                                    h_to_g_latency, int(h_to_g_verified)])
                 
-                # --- PHASE 2: Guest -> Host ---
+                # --- Guest -> Host ---
                 # Receive MD5 from guest
-                expected_md5_bytes = recv_exact(sock, 32)
+                expected_md5_bytes = sock.recv(32)
+                if len(expected_md5_bytes) != 32:
+                    print(f"  Error: Failed to receive MD5 at iteration {i}")
+                    break
                 expected_md5 = expected_md5_bytes.decode('ascii')
                 
-                # Pull from ring buffer (guest is timing until we send acknowledgement)
-                msg = dev.pull(payload_size, timeout=10.0)
+                # Read from mmap (guest is timing until we send acknowledgement)
+                msg = read_file_message(sock, f)
                 if msg is None:
                     print(f"  Error: Failed to receive message at iteration {i}")
                     sock.sendall(b'0')  # Send ack even on error
@@ -126,7 +142,10 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
                 sock.sendall(b'1')
                 
                 # Receive timing from guest
-                timing_data = recv_exact(sock, 8)
+                timing_data = sock.recv(8)
+                if len(timing_data) != 8:
+                    print(f"  Error: Failed to receive timing at iteration {i}")
+                    break
                 g_to_h_latency = struct.unpack('!Q', timing_data)[0]
                 
                 # Verify data (outside timing)
@@ -155,7 +174,7 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
                     'h_to_g_verified': h_to_g_verified
                 })
             
-            dev.close()
+            # Close connection for this payload size
             sock.close()
             
             # Print summary statistics
@@ -168,6 +187,7 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
         
     finally:
         csv_file.close()
+        os.close(f)
     
     print("\n" + "="*80)
     print(f"Benchmark complete. Results saved to {output_csv}")
@@ -175,10 +195,12 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
 
 if __name__ == "__main__":
     run_benchmark(
-        device_path='/dev/shm/khala_region',
+        mmap_path='/dev/shm/nexus_region',
         vsock_socket_path='/tmp/v.sock',
         # 16B to 16MB in power of 2 steps
         payload_sizes=[2**x for x in range(4, 25)],
         iterations=10,
         output_csv='benchmark_results.csv'
     )
+
+    

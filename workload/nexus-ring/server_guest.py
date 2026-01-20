@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Guest-side server for ring buffer benchmark using Khala SDK
+Guest-side server for ring buffer benchmark using Nexus SDK
 """
 
 import os
@@ -10,9 +10,9 @@ import socket
 import struct
 import hashlib
 
-# Add current directory to path to import khala
+# Add current directory to path to import nexus
 sys.path.insert(0, os.path.dirname(__file__))
-from .khala import KhalaDevice
+from .nexus import NexusDevice
 
 AF_VSOCK = 40
 VMADDR_CID_ANY = 0xFFFFFFFF
@@ -81,11 +81,11 @@ def handle_host_to_guest(conn, dev, payload_size):
     return verified
 
 def run_server():
-    if not os.path.exists(KhalaDevice.DEVICE_PATH):
-        print(f"Error: {KhalaDevice.DEVICE_PATH} not found")
+    if not os.path.exists(NexusDevice.DEVICE_PATH):
+        print(f"Error: {NexusDevice.DEVICE_PATH} not found")
         return 1
     
-    print(f"Starting Khala Server on Port {PORT}")
+    print(f"Starting Nexus Server on Port {PORT}")
     
     listen_sock = socket.socket(AF_VSOCK, socket.SOCK_STREAM)
     listen_sock.bind((VMADDR_CID_ANY, PORT))
@@ -106,7 +106,7 @@ def run_server():
             print(f"Config: {payload_size:,} bytes x {iterations}")
             
             # 2. Open Device
-            dev = KhalaDevice()
+            dev = NexusDevice()
             
             # 4. Run iterations
             for i in range(iterations):

@@ -52,7 +52,7 @@ passwd -d root
 
 # Install pylon workload dependencies
 pip_packages="grpcio==1.71.0 grpcio-tools==1.71.0 boto3==1.38.27"
-pip_packages="$pip_packages pyaes==1.6.1 pillow==11.2.1 scikit-learn==1.6.1 opencv-python-headless==4.11.0.86 pandas==2.2.3 imgaug==0.4.0 psutil==7.0.0 minio==7.2.15 chameleon==4.6.0"
+pip_packages="$pip_packages pyaes==1.6.1 pillow==11.2.1 scikit-learn==1.5.2 opencv-python-headless==4.11.0.86 pandas==2.2.3 imgaug==0.4.0 psutil==7.0.0 minio==7.2.15 chameleon==4.6.0"
 pip3 install $pip_packages --break-system-packages
 
 pip3 install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cpu --break-system-packages

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Guest-side server for khala-ring-v2 benchmark
+Guest-side server for nexus-ring-v2 benchmark
 Zero-VSOCK in critical path, uses metadata ring for coordination
 """
 
@@ -11,9 +11,9 @@ import socket
 import struct
 import hashlib
 
-# Add current directory to path to import khala
+# Add current directory to path to import nexus
 sys.path.insert(0, os.path.dirname(__file__))
-from khala import KhalaDevice
+from nexus import NexusDevice
 
 AF_VSOCK = 40
 VMADDR_CID_ANY = 0xFFFFFFFF
@@ -114,11 +114,11 @@ def handle_guest_to_host(conn, dev, payload_size):
     return verification == b'1'
 
 def run_server():
-    if not os.path.exists(KhalaDevice.DEVICE_PATH):
-        print(f"Error: {KhalaDevice.DEVICE_PATH} not found")
+    if not os.path.exists(NexusDevice.DEVICE_PATH):
+        print(f"Error: {NexusDevice.DEVICE_PATH} not found")
         return 1
     
-    print(f"Starting Khala v2 Server on Port {PORT} (Zero-VSOCK Critical Path)")
+    print(f"Starting Nexus v2 Server on Port {PORT} (Zero-VSOCK Critical Path)")
     
     listen_sock = socket.socket(AF_VSOCK, socket.SOCK_STREAM)
     listen_sock.bind((VMADDR_CID_ANY, PORT))
@@ -140,7 +140,7 @@ def run_server():
             print(f"Config: {payload_size:,} bytes x {iterations}")
             
             # 2. Open Device
-            dev = KhalaDevice()
+            dev = NexusDevice()
             
             # 3. Warmup
             warmup_device(dev)

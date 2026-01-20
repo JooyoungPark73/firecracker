@@ -27,7 +27,7 @@ use crate::vmm_config::memory_hotplug::{MemoryHotplugConfig, MemoryHotplugConfig
 use crate::vmm_config::metrics::{MetricsConfig, MetricsConfigError, init_metrics};
 use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::*;
-use crate::vmm_config::khala::{KhalaBuilder, KhalaConfig, KhalaConfigError};
+use crate::vmm_config::nexus::{NexusBuilder, NexusConfig, NexusConfigError};
 use crate::vmm_config::pmem::{PmemBuilder, PmemConfig, PmemConfigError};
 use crate::vmm_config::serial::SerialConfig;
 use crate::vmm_config::vsock::*;
@@ -65,8 +65,8 @@ pub enum ResourcesError {
     EntropyDevice(#[from] EntropyDeviceError),
     /// Pmem device error: {0}
     PmemDevice(#[from] PmemConfigError),
-    /// Khala device error: {0}
-    KhalaDevice(#[from] KhalaConfigError),
+    /// Nexus device error: {0}
+    NexusDevice(#[from] NexusConfigError),
     /// Memory hotplug config error: {0}
     MemoryHotplugConfig(#[from] MemoryHotplugConfigError),
 }
@@ -96,8 +96,8 @@ pub struct VmmConfig {
     entropy: Option<EntropyDeviceConfig>,
     #[serde(default, rename = "pmem")]
     pmem_devices: Vec<PmemConfig>,
-    #[serde(default, rename = "khala")]
-    khala_devices: Vec<KhalaConfig>,
+    #[serde(default, rename = "nexus")]
+    nexus_devices: Vec<NexusConfig>,
     #[serde(skip)]
     serial_config: Option<SerialConfig>,
     memory_hotplug: Option<MemoryHotplugConfig>,
@@ -123,8 +123,8 @@ pub struct VmResources {
     pub entropy: EntropyDeviceBuilder,
     /// The pmem devices.
     pub pmem: PmemBuilder,
-    /// The khala shared memory devices.
-    pub khala: KhalaBuilder,
+    /// The nexus shared memory devices.
+    pub nexus: NexusBuilder,
     /// The memory hotplug configuration.
     pub memory_hotplug: Option<MemoryHotplugConfig>,
     /// The optional Mmds data store.
@@ -161,7 +161,7 @@ impl VmResources {
 
         let mut resources: Self = Self {
             mmds_size_limit,
-            khala: KhalaBuilder::new(),
+            nexus: NexusBuilder::new(),
             ..Default::default()
         };
         if let Some(machine_config) = vmm_config.machine_config {
@@ -221,8 +221,8 @@ impl VmResources {
             resources.build_pmem_device(pmem_config)?;
         }
 
-        for khala_config in vmm_config.khala_devices.into_iter() {
-            resources.build_khala_device(khala_config)?;
+        for nexus_config in vmm_config.nexus_devices.into_iter() {
+            resources.build_nexus_device(nexus_config)?;
         }
 
         if let Some(serial_cfg) = vmm_config.serial_config {
@@ -386,11 +386,11 @@ impl VmResources {
         self.pmem.build(body, has_block_root)
     }
 
-    /// Builds a Khala shared memory device to be attached when the VM starts.
-    pub fn build_khala_device(&mut self, config: KhalaConfig) -> Result<(), KhalaConfigError> {
+    /// Builds a Nexus shared memory device to be attached when the VM starts.
+    pub fn build_nexus_device(&mut self, config: NexusConfig) -> Result<(), NexusConfigError> {
         // Validate and add the config to the builder
         // The actual device will be created during VM initialization with proper PCI BDF assignment
-        self.khala.build(config)
+        self.nexus.build(config)
     }
 
     /// Sets the memory hotplug configuration.
@@ -550,7 +550,7 @@ impl From<&VmResources> for VmmConfig {
             vsock: resources.vsock.config(),
             entropy: resources.entropy.config(),
             pmem_devices: resources.pmem.configs(),
-            khala_devices: resources.khala.configs(),
+            nexus_devices: resources.nexus.configs(),
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots.
             serial_config: None,
             memory_hotplug: resources.memory_hotplug.clone(),
@@ -664,7 +664,7 @@ mod tests {
             mmds_size_limit: HTTP_MAX_PAYLOAD_SIZE,
             entropy: Default::default(),
             pmem: Default::default(),
-            khala: KhalaBuilder::new(),
+            nexus: NexusBuilder::new(),
             pci_enabled: false,
             serial_out_path: None,
             memory_hotplug: Default::default(),

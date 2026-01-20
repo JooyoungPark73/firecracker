@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Host-side client for khala-ring-v2 benchmark
+Host-side client for nexus-ring-v2 benchmark
 Zero-VSOCK in critical path, uses metadata ring for coordination
 """
 
@@ -13,9 +13,9 @@ import hashlib
 import csv
 from datetime import datetime
 
-# Add current directory to path to import khala
+# Add current directory to path to import nexus
 sys.path.insert(0, os.path.dirname(__file__))
-from khala import KhalaDevice
+from nexus import NexusDevice
 
 AF_VSOCK = 40
 PORT = 9000
@@ -39,7 +39,7 @@ def warmup_device(dev):
     # Read the start and end of data region to trigger IO faults
     os.pread(dev.fd, 4096, dev.DATA_OFFSET)
 
-def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v.sock", 
+def run_benchmark(device_path='/dev/shm/nexus_region', vsock_socket_path="/tmp/v.sock", 
                  payload_sizes=None, iterations=10, output_csv='benchmark_results.csv'):
     """
     Run E2E latency benchmark with metadata ring coordination.
@@ -48,7 +48,7 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
     if payload_sizes is None:
         payload_sizes = [2**x for x in range(4, 25)]
     
-    print(f"Khala Ring Buffer v2 Benchmark (Host) - Zero-VSOCK Critical Path")
+    print(f"Nexus Ring Buffer v2 Benchmark (Host) - Zero-VSOCK Critical Path")
     print(f"Testing sizes: {[f'{s:,}' for s in payload_sizes]} bytes")
     print("="*80)
     
@@ -81,14 +81,14 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
             sock.sendall(config_data)
             
             # 3. Setup Device & Session
-            dev = KhalaDevice(device_path)
+            dev = NexusDevice(device_path)
             
             # Warmup
             warmup_device(dev)
             
             # Reset session
             session_id = int(time.time()) & 0xFFFFFFFF
-            dev.reset_session(session_id, KhalaDevice.DIR_H2G)
+            dev.reset_session(session_id, NexusDevice.DIR_H2G)
 
             for i in range(iterations):
                 timestamp = datetime.now().isoformat()
@@ -198,7 +198,7 @@ def run_benchmark(device_path='/dev/shm/khala_region', vsock_socket_path="/tmp/v
 
 if __name__ == "__main__":
     run_benchmark(
-        device_path='/dev/shm/khala_region',
+        device_path='/dev/shm/nexus_region',
         vsock_socket_path='/tmp/v.sock',
         # Test from 16B to 16MB in power of 2 steps
         payload_sizes=[2**x for x in range(4, 25)], 

@@ -1,62 +1,62 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Configuration and builder for Khala shared memory devices
+//! Configuration and builder for Nexus shared memory devices
 
 use std::sync::{Arc, Mutex};
 
-pub use crate::devices::khala::{KhalaConfig, KhalaError, KhalaPciDevice};
+pub use crate::devices::nexus::{NexusConfig, NexusError, NexusPciDevice};
 
-/// Errors associated with Khala device configuration
+/// Errors associated with Nexus device configuration
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
-pub enum KhalaConfigError {
+pub enum NexusConfigError {
     /// Device creation failed: {0}
-    CreateDevice(#[from] KhalaError),
+    CreateDevice(#[from] NexusError),
     /// Device with ID '{0}' already exists
     DeviceAlreadyExists(String),
     /// Invalid device configuration: {0}
     InvalidConfig(String),
 }
 
-/// Builder for Khala shared memory devices
+/// Builder for Nexus shared memory devices
 #[derive(Debug, Default)]
-pub struct KhalaBuilder {
-    /// Collection of Khala device configurations
-    pub configs: Vec<KhalaConfig>,
-    /// Collection of Khala devices (populated during VM build)
-    pub devices: Vec<Arc<Mutex<KhalaPciDevice>>>,
+pub struct NexusBuilder {
+    /// Collection of Nexus device configurations
+    pub configs: Vec<NexusConfig>,
+    /// Collection of Nexus devices (populated during VM build)
+    pub devices: Vec<Arc<Mutex<NexusPciDevice>>>,
 }
 
-impl KhalaBuilder {
-    /// Create a new KhalaBuilder
+impl NexusBuilder {
+    /// Create a new NexusBuilder
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Build a Khala device from configuration
+    /// Build a Nexus device from configuration
     ///
     /// This stores the configuration for later device creation during VM initialization.
-    pub fn build(&mut self, config: KhalaConfig) -> Result<(), KhalaConfigError> {
+    pub fn build(&mut self, config: NexusConfig) -> Result<(), NexusConfigError> {
         // Check if device with this ID already exists
         if self.configs.iter().any(|c| c.id == config.id) {
-            return Err(KhalaConfigError::DeviceAlreadyExists(config.id.clone()));
+            return Err(NexusConfigError::DeviceAlreadyExists(config.id.clone()));
         }
 
         // Validate configuration
         if config.id.is_empty() {
-            return Err(KhalaConfigError::InvalidConfig(
+            return Err(NexusConfigError::InvalidConfig(
                 "Device ID cannot be empty".to_string(),
             ));
         }
 
         if config.shmem_path.is_empty() {
-            return Err(KhalaConfigError::InvalidConfig(
+            return Err(NexusConfigError::InvalidConfig(
                 "Shared memory path cannot be empty".to_string(),
             ));
         }
 
         if config.size_mib == 0 {
-            return Err(KhalaConfigError::InvalidConfig(
+            return Err(NexusConfigError::InvalidConfig(
                 "Size must be greater than 0 MiB".to_string(),
             ));
         }
@@ -67,16 +67,16 @@ impl KhalaBuilder {
         Ok(())
     }
 
-    /// Add an existing Khala device to the builder
+    /// Add an existing Nexus device to the builder
     ///
     /// This is used during snapshot restoration to add devices
     /// in the same order as they were in the original VM.
-    pub fn add_device(&mut self, device: Arc<Mutex<KhalaPciDevice>>) {
+    pub fn add_device(&mut self, device: Arc<Mutex<NexusPciDevice>>) {
         self.devices.push(device);
     }
 
     /// Get the list of device configurations
-    pub fn configs(&self) -> Vec<KhalaConfig> {
+    pub fn configs(&self) -> Vec<NexusConfig> {
         self.configs.clone()
     }
 
@@ -91,12 +91,12 @@ impl KhalaBuilder {
     }
 
     /// Get a device configuration by ID
-    pub fn get_config(&self, id: &str) -> Option<&KhalaConfig> {
+    pub fn get_config(&self, id: &str) -> Option<&NexusConfig> {
         self.configs.iter().find(|c| c.id == id)
     }
 
     /// Get a device by ID
-    pub fn get_device(&self, id: &str) -> Option<&Arc<Mutex<KhalaPciDevice>>> {
+    pub fn get_device(&self, id: &str) -> Option<&Arc<Mutex<NexusPciDevice>>> {
         self.devices.iter().find(|d| d.lock().unwrap().id() == id)
     }
 }
@@ -106,19 +106,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_khala_builder_new() {
-        let builder = KhalaBuilder::new();
+    fn test_nexus_builder_new() {
+        let builder = NexusBuilder::new();
         assert!(builder.is_empty());
         assert_eq!(builder.len(), 0);
     }
 
     #[test]
-    fn test_khala_builder_build() {
-        let mut builder = KhalaBuilder::new();
+    fn test_nexus_builder_build() {
+        let mut builder = NexusBuilder::new();
 
-        let config = KhalaConfig {
-            id: "khala0".to_string(),
-            shmem_path: "/dev/shm/khala_test".to_string(),
+        let config = NexusConfig {
+            id: "nexus0".to_string(),
+            shmem_path: "/dev/shm/nexus_test".to_string(),
             size_mib: 1,
         };
 
@@ -132,12 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn test_khala_builder_duplicate_id() {
-        let mut builder = KhalaBuilder::new();
+    fn test_nexus_builder_duplicate_id() {
+        let mut builder = NexusBuilder::new();
 
-        let config = KhalaConfig {
-            id: "khala0".to_string(),
-            shmem_path: "/dev/shm/khala_test".to_string(),
+        let config = NexusConfig {
+            id: "nexus0".to_string(),
+            shmem_path: "/dev/shm/nexus_test".to_string(),
             size_mib: 1,
         };
 
@@ -149,52 +149,52 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            KhalaConfigError::DeviceAlreadyExists(_)
+            NexusConfigError::DeviceAlreadyExists(_)
         ));
     }
 
     #[test]
-    fn test_khala_builder_invalid_config() {
-        let mut builder = KhalaBuilder::new();
+    fn test_nexus_builder_invalid_config() {
+        let mut builder = NexusBuilder::new();
 
         // Empty ID
-        let config = KhalaConfig {
+        let config = NexusConfig {
             id: "".to_string(),
-            shmem_path: "/dev/shm/khala_test".to_string(),
+            shmem_path: "/dev/shm/nexus_test".to_string(),
             size_mib: 1,
         };
         assert!(builder.build(config).is_err());
 
         // Empty path
-        let config = KhalaConfig {
-            id: "khala0".to_string(),
+        let config = NexusConfig {
+            id: "nexus0".to_string(),
             shmem_path: "".to_string(),
             size_mib: 1,
         };
         assert!(builder.build(config).is_err());
 
         // Zero size
-        let config = KhalaConfig {
-            id: "khala0".to_string(),
-            shmem_path: "/dev/shm/khala_test".to_string(),
+        let config = NexusConfig {
+            id: "nexus0".to_string(),
+            shmem_path: "/dev/shm/nexus_test".to_string(),
             size_mib: 0,
         };
         assert!(builder.build(config).is_err());
     }
 
     #[test]
-    fn test_khala_builder_get_device() {
-        let mut builder = KhalaBuilder::new();
+    fn test_nexus_builder_get_device() {
+        let mut builder = NexusBuilder::new();
 
-        let config = KhalaConfig {
-            id: "khala0".to_string(),
-            shmem_path: "/dev/shm/khala_test".to_string(),
+        let config = NexusConfig {
+            id: "nexus0".to_string(),
+            shmem_path: "/dev/shm/nexus_test".to_string(),
             size_mib: 1,
         };
 
         builder.build(config).unwrap();
 
-        let config_result = builder.get_config("khala0");
+        let config_result = builder.get_config("nexus0");
         assert!(config_result.is_some());
 
         let device = builder.get_device("nonexistent");

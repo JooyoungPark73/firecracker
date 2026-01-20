@@ -19,7 +19,7 @@ def recv_until_newline(sock: socket.socket) -> bytes:
             return message
 
 # --- 2. Explicit Struct Alignment ---
-class KhalaControl(ctypes.Structure):
+class NexusControl(ctypes.Structure):
     _pack_ = 8
     _fields_ = [
         ("direction", ctypes.c_uint32),
@@ -30,8 +30,8 @@ class KhalaControl(ctypes.Structure):
         ("padding", ctypes.c_uint32),
     ]
 
-class KhalaDevice:
-    DEVICE_PATH = "/dev/khala0"
+class NexusDevice:
+    DEVICE_PATH = "/dev/nexus0"
     TOTAL_SIZE = 2 * 1024 * 1024
     CONTROL_SIZE = 4096
     DATA_OFFSET = 4096
@@ -56,7 +56,7 @@ class KhalaDevice:
             mmap.MAP_SHARED, 
             mmap.PROT_READ | mmap.PROT_WRITE
         )
-        self.ctrl = KhalaControl.from_buffer(self.mm)
+        self.ctrl = NexusControl.from_buffer(self.mm)
 
     def close(self):
         if hasattr(self, 'ctrl'):

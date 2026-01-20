@@ -1,12 +1,12 @@
 #!/bin/bash
-# Setup script for Khala shared memory device
+# Setup script for Nexus shared memory device
 
 set -e
 
-SHMEM_PATH="/dev/shm/khala_region"
+SHMEM_PATH="/dev/shm/nexus_region"
 SHMEM_SIZE_MB=16
 
-echo "Setting up Khala shared memory..."
+echo "Setting up Nexus shared memory..."
 
 # Remove existing shared memory file
 sudo rm -f "${SHMEM_PATH}"
@@ -18,7 +18,7 @@ import mmap
 import os
 from pathlib import Path
 
-SHMEM_PATH = "/dev/shm/khala_region"
+SHMEM_PATH = "/dev/shm/nexus_region"
 SHMEM_SIZE = 16 * 1024 * 1024  # 16 MB
 
 # Remove if exists
@@ -48,4 +48,4 @@ else
     exit 1
 fi
 
-echo "Khala shared memory setup complete!"
+echo "Nexus shared memory setup complete!"

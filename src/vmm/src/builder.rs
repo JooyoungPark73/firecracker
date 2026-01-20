@@ -246,9 +246,9 @@ pub fn build_microvm_for_boot(
         event_manager,
     )?;
 
-    // Attach Khala shared memory devices if configured and PCI is enabled
-    if vm_resources.pci_enabled && !vm_resources.khala.is_empty() {
-        attach_khala_devices(&mut device_manager, &vm, vm_resources.khala.configs())?;
+    // Attach Nexus shared memory devices if configured and PCI is enabled
+    if vm_resources.pci_enabled && !vm_resources.nexus.is_empty() {
+        attach_nexus_devices(&mut device_manager, &vm, vm_resources.nexus.configs())?;
     }
 
     if let Some(unix_vsock) = vm_resources.vsock.get() {
@@ -749,19 +749,19 @@ fn attach_balloon_device(
     device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, false)
 }
 
-fn attach_khala_devices(
+fn attach_nexus_devices(
     device_manager: &mut DeviceManager,
     vm: &Arc<Vm>,
-    khala_configs: Vec<crate::vmm_config::khala::KhalaConfig>,
+    nexus_configs: Vec<crate::vmm_config::nexus::NexusConfig>,
 ) -> Result<(), StartMicrovmError> {
-    debug!("attach_khala_devices called with {} configs", khala_configs.len());
-    for config in khala_configs.iter() {
-        debug!("Attaching Khala device '{}' (path={}, size={}MiB)",
+    debug!("attach_nexus_devices called with {} configs", nexus_configs.len());
+    for config in nexus_configs.iter() {
+        debug!("Attaching Nexus device '{}' (path={}, size={}MiB)",
             config.id, config.shmem_path, config.size_mib);
         
         device_manager
             .pci_devices
-            .attach_khala_device(vm, config.id.clone(), config.clone())
+            .attach_nexus_device(vm, config.id.clone(), config.clone())
             .map_err(StartMicrovmError::EnablePciDevices)?;
     }
 

@@ -5,7 +5,7 @@ import time
 import struct
 import glob
 
-# Khala PCI IDs (without 0x prefix for sysfs)
+# Nexus PCI IDs (without 0x prefix for sysfs)
 VENDOR_ID = "1234"
 DEVICE_ID = "dead"
 # Read a length-prefixed message from a memory-mapped file
@@ -47,7 +47,7 @@ def main_benchmark(memPath, num_iterations=10):
     PORT = 9000
     mmapOffset = 0
 
-    # Try khala-shmem device first (raw_memory mode with driver)
+    # Try nexus-shmem device first (raw_memory mode with driver)
     # if os.path.exists('/sys/bus/pci/devices/0000:00:03.0/resource0'):
     #     print("Using /sys/bus/pci/devices/0000:00:03.0/resource0 (raw shared memory)")
     #     memPath = "/sys/bus/pci/devices/0000:00:03.0/resource0"
@@ -171,9 +171,9 @@ def main_benchmark(memPath, num_iterations=10):
         os.close(f)
 
 
-def find_khala_device():
-    """Find the Khala PCI device and bind it to uio_pci_generic."""
-    print("[Guest] Searching for Khala PCI device...")
+def find_nexus_device():
+    """Find the Nexus PCI device and bind it to uio_pci_generic."""
+    print("[Guest] Searching for Nexus PCI device...")
     
     # Load uio_pci_generic driver
     os.system("modprobe uio_pci_generic 2>/dev/null")
@@ -196,7 +196,7 @@ def find_khala_device():
         
         if vendor.lower() == VENDOR_ID and device.lower() == DEVICE_ID:
             device_name = os.path.basename(device_path)
-            print(f"[Guest] Found Khala device: {device_name}")
+            print(f"[Guest] Found Nexus device: {device_name}")
             print(f"[Guest]   Vendor: 0x{vendor}, Device: 0x{device}")
             
             # Bind to uio_pci_generic
@@ -270,6 +270,6 @@ def get_bar_resource(device_path, bar_index):
     return resource_path, 0
 
 if __name__ == "__main__":
-    device_path, uio_name = find_khala_device()
+    device_path, uio_name = find_nexus_device()
     bar0_path, bar0_size = get_bar_resource(device_path, 0)
     main_benchmark(memPath=bar0_path)

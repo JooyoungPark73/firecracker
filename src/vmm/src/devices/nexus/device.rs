@@ -76,10 +76,8 @@ pub enum NexusError {
 pub struct NexusConfig {
     /// Device identifier
     pub id: String,
-    /// Path to the shared memory file (e.g., /dev/shm/nexus_region)
-    pub shmem_path: String,
-    /// Size of the shared memory region in MiB
-    pub size_mib: u64,
+    /// Path to the shared memory file on the host (e.g., /dev/shm/nexus_region)
+    pub path_on_host: String,
 }
 
 /// Nexus PCI Device implementation
@@ -101,7 +99,7 @@ pub struct NexusPciDevice {
     /// Actual size of shared memory in bytes
     pub(crate) shmem_size_bytes: u64,
     /// Backing file handle (kept alive to maintain fd)
-    pub(crate) file: Option<File>,
+    pub(crate) file: File,
     /// File length in bytes
     pub(crate) file_len: u64,
     /// mmap pointer (userspace_addr for KVM)
@@ -131,15 +129,15 @@ impl NexusPciDevice {
         pci_device_bdf: u32,
     ) -> Result<Self, NexusError> {
         // Validate configuration
-        if config.size_mib == 0 {
+        if config.path_on_host.is_empty() {
             return Err(NexusError::InvalidConfig(
-                "Size must be greater than 0".to_string(),
+                "Path cannot be empty".to_string(),
             ));
         }
 
-        let shmem_size_bytes = mib_to_bytes(config.size_mib.try_into().map_err(|_| {
-            NexusError::InvalidConfig("Size too large".to_string())
-        })?);
+        // Open and mmap the backing file
+        let (file, file_len, mmap_ptr) = Self::mmap_backing_file(&config.path_on_host)?;
+        let shmem_size_bytes = file_len;
 
         // Create PCI configuration with interrupt pin
         let mut configuration = PciConfiguration::new_type0(
@@ -159,8 +157,8 @@ impl NexusPciDevice {
         configuration.set_register(15, (reg15_value & 0xFFFF_00FF) | (int_pin << 8));
 
         debug!(
-            "Creating Nexus device '{}' with {} MiB shared memory at {}, INT#A assigned",
-            id, config.size_mib, config.shmem_path
+            "Creating Nexus device '{}' with shared memory at {}, INT#A assigned",
+            id, config.path_on_host
         );
 
         Ok(NexusPciDevice {
@@ -172,9 +170,9 @@ impl NexusPciDevice {
             shmem_bar_addr: 0,
             shmem_guest_addr: 0,
             shmem_size_bytes: shmem_size_bytes as u64,
-            file: None,
-            file_len: 0,
-            mmap_ptr: 0,
+            file,
+            file_len,
+            mmap_ptr,
         })
     }
 
@@ -212,25 +210,22 @@ impl NexusPciDevice {
     }
 
     /// Map backing file into memory (adapted from pmem)
-    fn mmap_backing_file(&mut self) -> Result<(), NexusError> {
+    fn mmap_backing_file(path: &str) -> Result<(File, u64, u64), NexusError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(&self.config.shmem_path)
+            .open(path)
             .map_err(NexusError::OpenShmemFile)?;
 
-        let file_len = file.metadata()
+        let file_len = file
+            .metadata()
             .map_err(NexusError::FileMetadata)?
             .len();
 
         if file_len == 0 {
-            return Err(NexusError::InvalidConfig("Backing file size is 0".to_string()));
-        }
-        if file_len != self.shmem_size_bytes {
-            return Err(NexusError::SizeMismatch {
-                expected: self.shmem_size_bytes,
-                actual: file_len,
-            });
+            return Err(NexusError::InvalidConfig(
+                "Backing file size is 0".to_string(),
+            ));
         }
 
         let prot = libc::PROT_READ | libc::PROT_WRITE;
@@ -249,28 +244,23 @@ impl NexusPciDevice {
         };
 
         if mmap_ptr == libc::MAP_FAILED {
-            return Err(NexusError::InvalidConfig(
-                format!("Failed to mmap shared memory file: {}", 
-                    std::io::Error::last_os_error())
-            ));
+            return Err(NexusError::InvalidConfig(format!(
+                "Failed to mmap shared memory file: {}",
+                std::io::Error::last_os_error()
+            )));
         }
-
-        self.file = Some(file);
-        self.file_len = file_len;
-        self.mmap_ptr = mmap_ptr as u64;
 
         debug!(
             "mmapped Nexus backing file '{}' ({} bytes) at userspace_addr {:#x}",
-            self.config.shmem_path, file_len, self.mmap_ptr
+            path, file_len, mmap_ptr as u64
         );
 
-        Ok(())
+        Ok((file, file_len, mmap_ptr as u64))
     }
 
     /// Map the shared memory file into guest address space
     pub fn map_shared_memory(&mut self, vm: &Vm) -> Result<(), NexusError> {
-        // First, mmap the backing file
-        self.mmap_backing_file()?;
+        // File is already mmapped from new(), just register with KVM
 
         // Get KVM slot
         let slot = vm.next_kvm_slot(1)

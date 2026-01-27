@@ -756,8 +756,8 @@ fn attach_nexus_devices(
 ) -> Result<(), StartMicrovmError> {
     debug!("attach_nexus_devices called with {} configs", nexus_configs.len());
     for config in nexus_configs.iter() {
-        debug!("Attaching Nexus device '{}' (path={}, size={}MiB)",
-            config.id, config.shmem_path, config.size_mib);
+        debug!("Attaching Nexus device '{}' (path={})",
+            config.id, config.path_on_host);
         
         device_manager
             .pci_devices

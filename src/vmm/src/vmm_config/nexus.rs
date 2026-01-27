@@ -49,15 +49,9 @@ impl NexusBuilder {
             ));
         }
 
-        if config.shmem_path.is_empty() {
+        if config.path_on_host.is_empty() {
             return Err(NexusConfigError::InvalidConfig(
-                "Shared memory path cannot be empty".to_string(),
-            ));
-        }
-
-        if config.size_mib == 0 {
-            return Err(NexusConfigError::InvalidConfig(
-                "Size must be greater than 0 MiB".to_string(),
+                "Path on host cannot be empty".to_string(),
             ));
         }
 
@@ -118,8 +112,7 @@ mod tests {
 
         let config = NexusConfig {
             id: "nexus0".to_string(),
-            shmem_path: "/dev/shm/nexus_test".to_string(),
-            size_mib: 1,
+            path_on_host: "/dev/shm/nexus_test".to_string(),
         };
 
         let result = builder.build(config.clone());
@@ -137,8 +130,7 @@ mod tests {
 
         let config = NexusConfig {
             id: "nexus0".to_string(),
-            shmem_path: "/dev/shm/nexus_test".to_string(),
-            size_mib: 1,
+            path_on_host: "/dev/shm/nexus_test".to_string(),
         };
 
         // First device should succeed
@@ -160,24 +152,14 @@ mod tests {
         // Empty ID
         let config = NexusConfig {
             id: "".to_string(),
-            shmem_path: "/dev/shm/nexus_test".to_string(),
-            size_mib: 1,
+            path_on_host: "/dev/shm/nexus_test".to_string(),
         };
         assert!(builder.build(config).is_err());
 
         // Empty path
         let config = NexusConfig {
             id: "nexus0".to_string(),
-            shmem_path: "".to_string(),
-            size_mib: 1,
-        };
-        assert!(builder.build(config).is_err());
-
-        // Zero size
-        let config = NexusConfig {
-            id: "nexus0".to_string(),
-            shmem_path: "/dev/shm/nexus_test".to_string(),
-            size_mib: 0,
+            path_on_host: "".to_string(),
         };
         assert!(builder.build(config).is_err());
     }
@@ -188,8 +170,7 @@ mod tests {
 
         let config = NexusConfig {
             id: "nexus0".to_string(),
-            shmem_path: "/dev/shm/nexus_test".to_string(),
-            size_mib: 1,
+            path_on_host: "/dev/shm/nexus_test".to_string(),
         };
 
         builder.build(config).unwrap();

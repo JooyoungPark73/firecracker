@@ -49,8 +49,7 @@ mod tests {
 
         let body = r#"{
             "id": "nexus0",
-            "shmem_path": "/dev/shm/nexus_region",
-            "size_mib": 16
+            "path_on_host": "/dev/shm/nexus_region"
         }"#;
 
         let req = parse_put_nexus(&Body::new(body), Some("nexus0")).unwrap();

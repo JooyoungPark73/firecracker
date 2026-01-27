@@ -74,8 +74,7 @@ sudo curl --unix-socket "${API_SOCKET}" -i \
     -H 'Content-Type: application/json' \
     -d "{
          \"id\": \"nexus0\",
-         \"shmem_path\": \"/dev/shm/nexus_region\",
-         \"size_mib\": 16
+         \"path_on_host\": \"/dev/shm/nexus_region\"
     }"
 
 # # Set machine configuration with pmem

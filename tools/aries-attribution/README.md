@@ -155,6 +155,7 @@ the fixture also refuses to reuse its output directory.
 Run from the Firecracker repository root, replacing the two input paths:
 
 ```bash
+set -eu
 tracer_binary=/absolute/path/to/firecracker
 kernel_elf=/absolute/path/to/the-matching-vmlinux
 fixture_root="$PWD/.cache/aries-attribution-known-object-001"

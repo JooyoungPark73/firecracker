@@ -1,8 +1,8 @@
-# Experimental ARIES dirty-page epochs
+# Experimental Firecracker tracer
 
 This branch adds a paused-VM `PUT /dirty-log` endpoint to Firecracker **v1.13.1**, based on commit `f8d253a0750f2cbad678c74a1153caa7596475c0`. It exports separate KVM/vCPU and VMM/device dirty-page bitmaps without writing a memory snapshot. It is an experimental measurement extension, not an eviction or migration implementation.
 
-Host page-idle access tracking belongs to an external observer and is not included here. The API cannot distinguish reads, infer page ownership, or prove that an unchanged page was not accessed.
+The VMM also exposes independently selectable host page-idle access tracking, residency census, and bounded raw metadata capture. The optional coordinator pairs selected metrics across epochs. Kernel layout interpretation and page attribution run in the external companion under tools/aries-attribution; guest Linux is unchanged. Dirty evidence cannot distinguish reads, and host idle tracking has documented eligibility and clear-young/TLB limitations.
 
 ## Enable and build
 
@@ -22,7 +22,7 @@ No deployment binary is replaced automatically. Build and run an isolated binary
 
 ## API and lifecycle
 
-All new requests require a booted, HTTP-paused VM. Example bodies for `PUT /dirty-log`:
+New live collection requests require a booted, successful HTTP Pause hold (plain paused vCPU state is insufficient). Immutable export/info/ACK operations may run after Resume. Example bodies for `PUT /dirty-log`:
 
 ```json
 {"operation":"arm","epoch":1}
@@ -83,3 +83,138 @@ A separate source-only native fixture is in [tests/aries_dirty_log](../tests/ari
 Historical evidence before the completion-error-latch review fix (kept separate from the new build's validation): 564 VMM tests passed; the full 256MiB Linux fixture passed CPU/block and deferred network/vsock delivery checks; an 8GiB fixture passed two-slot layout, CPU/block and reset checks (3GiB at GPA 0, 5GiB at GPA 4GiB). The 8GiB fixture intentionally does not claim the 256MiB host-mapping payload scanner supports that layout. Independent standalone backend/observer smokes also passed on four additional workers. Those host-idle results are external and do not strengthen this API into a universal read-access detector.
 
 The validated external kernel image was Linux 5.10.239, SHA256 `0e524afe5a90f4ce4b13091a8b5acf7fbe9e7584e711f609d27b69b78564117d`. Its original build provenance was deployment-supplied rather than reconstructed here. Reproductions must retain their own source/config/build reference and image hash. Validation is bounded to the tested host/guest/device combinations; it does not establish full Linux/device compatibility.
+
+## Independently selectable resources
+
+All requests use HTTP JSON over the existing Unix API socket. The request tag is
+`operation`; unknown fields are rejected. The legacy dirty endpoint above
+remains independently usable. It does not open host pagemap or idle facilities.
+
+| Resource | Operations | Additional facilities |
+|---|---|---|
+| `/page-idle` | arm, collect, export, ack | privileged host pagemap/kpageflags/kpagecount/page_idle |
+| `/memory-census` | capture, export, ack | host pagemap and census metadata; never page_idle |
+| `/metadata-capture` | begin, info, read_pages, scan, seal, abort, export, ack | bounded VMM guest-memory reads and census |
+| `/trace-epochs` | arm, rotate, export, ack | only selected metric facilities |
+
+Page-idle does not require KVM dirty logging. Metadata `quiescence_only` mode
+does not require dirty logging either; it explicitly reports that weaker
+consistency mode. Dirty-validated metadata requires a coordinator selecting
+`dirty` and `metadata`. The coordinator owns reset rights for its selected
+metrics until VM destruction; independent reset attempts are rejected.
+
+Coordinator example:
+
+```json
+{"operation":"arm","epoch":1,"phase":"bootstrap","metrics":["dirty","idle","census","metadata"]}
+{"operation":"rotate","vm_generation":"RETURNED_GENERATION","epoch":1,"next_epoch":2,"phase":"tool"}
+```
+
+Responses carry `schema`, `vm_generation` and bounded record references.
+Rotation returns `epoch_record_id` plus selected
+`access_record_id`/`dirty_record_id`/`census_record_id` aliases.
+The initial arm record describes the discarded boot baseline, not a workload.
+Independent page-idle uses arm/collect with the same epoch progression.
+Collect, rotate and ACK require the expected generation; record IDs embed it.
+Never infer an atomic common timestamp: access, dirty, census and rearm have
+separate source timing and observer effects.
+
+Census `capture` without `request_id` always samples fresh. An optional
+`vm_generation` rejects a stale VM before side effects. With a nonempty
+`request_id`, only an exact retry of the most recent successful manager
+request returns the historical receipt without resampling; this is not a
+persistent idempotency-key registry. A fresh census is rejected while metadata
+is open or pending, before draining devices, because a drain may write guest
+queue state. Immutable census export remains allowed.
+
+## Bounded raw metadata capture
+
+Begin supplies `capture_id`, mode `bootstrap` or `attribution`,
+consistency `quiescence_only` or `dirty_validated`, and optional
+`max_bytes`/`max_scan_bytes`. Dirty-validated begin additionally supplies
+the active `epoch` and `vm_generation`. All subsequent capture operations
+require both capture ID and generation. Begin captures a census before any
+payload read and returns its immutable record reference and GPA regions.
+
+`read_pages` accepts 1–256 page-aligned GPAs. The first copy per GPA is cached;
+repeated reads return those frozen bytes. Each result includes base64 data,
+SHA256, and pre/post presence/PFN evidence. Every lowest-level guest read,
+including bootstrap scans and translation-table reads, enters the read mask.
+
+`scan` accepts a 1–256-byte base64 needle, page-aligned start/end/cursor and
+a per-request scan budget of 4 KiB–1 MiB. Only pages resident in the begin census
+are searched. Matches cross contiguous page and request boundaries using a
+bounded tail; gaps/nonresident pages reset the tail. Matches identify their
+starting page and byte offset. Per-request scanned bytes/hash and cumulative
+scanned bytes are distinct. Scanned bytes are not all retained: scan logs retain
+ordered read ranges/GPAs, hashes and matches, so full search-byte replay is not
+claimed. Anchor bytes subsequently copied with read_pages are replayable.
+
+Seal closes reads and freezes payloads. Quiescence-only seal permits Resume.
+Dirty-validated seal creates an immutable `pending` record and blocks Resume
+until the next logical coordinator rotate intersects the whole outgoing dirty
+set with the complete read mask. Rotation creates a separate `valid` or
+`invalid` record; the original pending record never changes. The response
+lists both IDs and overlap counts. Info points to the final receipt while
+retaining the sealed ID. Old capture info remains available while its records
+are retained, including after Resume and a subsequent capture begin.
+
+An explicit abort closes an open capture or discards a sealed-pending capture,
+retaining original bytes and a separate `discarded` receipt with reason.
+It is for failed capture/validation cleanup, not routine publication failure.
+A poisoned collector rejects further measurement, including cached mutating
+retries, but permits immutable export and abort. Once no open/pending capture
+remains, native Resume is allowed for harness/evaluation/cleanup; restarting
+the VM is still required before new measurement.
+
+Successful HTTP Pause holds both vCPUs and the API event loop. New collection
+may explicitly drain async block completions inside that hold. Rejected Resume
+must not release the hold. External asynchronous I/O and conservative device
+bitmap semantics remain part of the recorded consistency contract.
+
+## Export, memory accounting, and raw evidence
+
+Export takes `record_id`, `kind`, ordinal `offset` and `limit`,
+returning frozen rows, total_rows, next_offset, complete and metadata.
+It never reads live RAM or resamples PFNs. Page-data chunks are capped at 256
+rows; other datasets at 4096. Export kinds include access, dirty, resident,
+absent_ranges, pages, read_mask, scan_log and dirty_overlap as appropriate.
+Absence ranges are separately paged, not an unbounded response header.
+ACK releases record ownership only after the consumer has durably stored it.
+
+Raw access rows preserve observed/idle/unknown and explicit unknown reasons;
+dirty rows separately preserve CPU and conservative VMM positive evidence.
+Residency preserves GPA aliases and zero/hidden PFNs. Census includes VMM
+RSS/PSS where available. No eligibility filter removes dirty GPAs. Downstream
+analysis may form an effective union, but must retain the source distinctions.
+
+Compact bitmaps/PFN arrays are retained internally; bounded rows are generated
+only for exports. The default aggregate capacity estimate limit is 1 GiB,
+with at most eight retained records. Default retained metadata is 256 MiB;
+scan allowance is zero for attribution and 1 GiB for bootstrap. Requested
+budgets are bounded and reserved along with future seal/finalization/abort
+receipt slots before side effects. The host module's approximately 258 MiB
+8 GiB-RAM preflight figure is a conservative source-derived bound, not measured
+RSS. Capacity estimates and operation-local Vec capacities are distinct from
+OS RSS; this is not an OS-enforced heap limit.
+
+Structured HTTP400 failures include schema/generation plus
+`error.{code,message,mutation_performed,reset_performed,poisoned}`.
+Only `backpressure` with all three flags false proves non-destructive
+preflight rejection. The caller may finish exports/ACKs before explicitly
+retrying; ambiguous transport failures must not trigger blind reset retries.
+
+
+### Native lifecycle uncertainty
+
+A failure executing native Pause or Resume can leave only some vCPUs transitioned
+even if the reported VM state has not changed. Such an execution failure
+permanently invalidates both new metric collection and legacy dirty logging,
+clears successful HTTP-hold authority, and records a lifecycle-uncertainty
+reason. A later successful Pause does not clear that measurement latch.
+Immutable export/info and explicit capture discard remain available, followed
+by native Resume for cleanup; new measurement requires a fresh VM.
+This differs from a policy-rejected Resume while a capture is open/pending:
+that request never executes the transition and preserves the valid held pause.
+
+The source-versioned check summary is in [firecracker-tracer-validation.md](firecracker-tracer-validation.md).

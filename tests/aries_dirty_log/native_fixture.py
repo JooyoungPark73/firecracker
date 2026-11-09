@@ -123,6 +123,15 @@ def run(out, mem_mib, binary, kernel, initrd, kernel_source, tap):
         if mem_mib == 8192:
             assert len(arm['regions']) == 2
         call('PATCH', '/vm', {'state': 'Resumed'})
+        assert arm == call('PUT', '/dirty-log', {'operation':'arm','epoch':1})
+        results['immutable_retry_after_resume'] = True
+        try:
+            call('PUT','/dirty-log',{'operation':'collect','epoch':1,'next_epoch':2})
+        except RuntimeError as error:
+            assert error.args[0][1] == 400
+        else:
+            raise AssertionError('fresh running dirty collection must fail')
+        results['fresh_running_collect_rejected'] = True
         proc.stdin.write(b'markers\n')
         proc.stdin.flush()
         wait_text('MARKERS_DONE read=0 restore=0 block=4096 first=167')

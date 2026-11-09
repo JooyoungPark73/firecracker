@@ -472,11 +472,16 @@ impl VirtioBlock {
     }
 
     fn process_async_completion_queue(&mut self) {
+        self.process_async_completion_queue_inner(true);
+    }
+
+    fn process_async_completion_queue_inner(&mut self, publish_empty: bool) {
         let engine = unwrap_async_file_engine_or_return!(&mut self.disk.file_engine);
 
         // This is safe since we checked in the event handler that the device is activated.
         let active_state = self.device_state.active_state().unwrap();
         let queue = &mut self.queues[0];
+        let mut completed = false;
 
         loop {
             match engine.pop(&active_state.mem) {
@@ -487,6 +492,7 @@ impl VirtioBlock {
                 }
                 Ok(None) => break,
                 Ok(Some(cqe)) => {
+                    completed = true;
                     let res = cqe.result();
                     let user_data = cqe.user_data();
 
@@ -510,6 +516,11 @@ impl VirtioBlock {
                         });
                 }
             }
+        }
+        // Empty observer drains must not rewrite the used index and invalidate
+        // a metadata capture. Preserve the ordinary event-loop behavior.
+        if !completed && !publish_empty {
+            return;
         }
         queue.advance_used_ring_idx();
 
@@ -586,7 +597,7 @@ impl VirtioBlock {
             .drain(false)
             .map_err(|e| e.to_string())?;
         if let FileEngine::Async(_) = self.disk.file_engine {
-            self.process_async_completion_queue();
+            self.process_async_completion_queue_inner(false);
         }
         if let Some(error) = &self.dirty_log_completion_error {
             return Err(format!("unconfirmed async completion: {error}"));
@@ -1247,6 +1258,10 @@ mod tests {
             mem.reset_dirty();
             block.quiesce_dirty_log().unwrap();
             assert!(!region.bitmap().dirty_at(data.raw_value() as usize));
+            assert!(
+                !region.bitmap().dirty_at(0),
+                "empty observer drain rewrote the used ring"
+            );
         }
     }
 

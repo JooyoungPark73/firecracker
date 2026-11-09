@@ -29,6 +29,7 @@ pub struct DirtyLogState {
     active: Option<u64>,
     last: Option<(DirtyLogRequest, Value)>,
     poisoned: bool,
+    lifecycle_failure: Option<String>,
 }
 fn packed(words: &[u64]) -> String {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
@@ -39,8 +40,29 @@ impl DirtyLogState {
     pub fn started(&self) -> bool {
         self.last.is_some() || self.poisoned
     }
+    /// A failed native lifecycle transition makes subsequent epoch evidence unsafe.
+    pub fn invalidate_lifecycle(&mut self, reason: String) {
+        self.poisoned = true;
+        self.lifecycle_failure = Some(format!("native lifecycle uncertain: {reason}; restart VM"));
+    }
+    /// Native transition uncertainty is distinct from bitmap collection failure.
+    pub fn lifecycle_failure(&self) -> Option<&str> {
+        self.lifecycle_failure.as_deref()
+    }
+    /// Replay only the most recent immutable successful response, without live access.
+    pub fn cached_reply(&self, req: &DirtyLogRequest) -> Option<Value> {
+        if self.poisoned {
+            return None;
+        }
+        self.last
+            .as_ref()
+            .and_then(|(prior, value)| (prior == req).then(|| value.clone()))
+    }
     /// Collect under HTTP held-pause, drain async block, and rotate both maps.
     pub fn transact(&mut self, vmm: &mut Vmm, req: DirtyLogRequest) -> Result<Value, String> {
+        if let Some(reason) = &self.lifecycle_failure {
+            return Err(reason.clone());
+        }
         if self.poisoned {
             return Err("dirty epoch invalidated by prior collection failure; restart VM".into());
         }
@@ -83,39 +105,7 @@ impl DirtyLogState {
         // The runtime API executes on the VMM event loop. vCPUs are stopped;
         // synchronous devices cannot run concurrently. Drain asynchronous block
         // reads before sampling/resetting the host-maintained bitmap.
-        let quiesce = vmm
-            .device_manager
-            .mmio_devices
-            .for_each_virtio_device(|kind, _, entry| {
-                let transport = entry
-                    .inner
-                    .lock()
-                    .map_err(|_| "transport lock poisoned".to_string())?;
-                let mut dev = transport.locked_device();
-                match *kind {
-                    2 => {
-                        let block = dev
-                            .as_mut_any()
-                            .downcast_mut::<Block>()
-                            .ok_or("unknown block implementation")?;
-                        match block {
-                            Block::Virtio(b) => b.quiesce_dirty_log()?,
-                            Block::VhostUser(_) => {
-                                return Err("external vhost-user writer unsupported".into());
-                            }
-                        }
-                    }
-                    1 => {
-                        dev.as_mut_any()
-                            .downcast_mut::<Net>()
-                            .ok_or("unknown net implementation")?
-                            .prepare_save();
-                    }
-                    19 => (),
-                    _ => return Err(format!("unvalidated virtio writer type {kind}")),
-                }
-                Ok::<(), String>(())
-            });
+        let quiesce = quiesce_devices(vmm);
         if let Err(e) = quiesce {
             self.poisoned = true;
             return Err(e);
@@ -188,6 +178,49 @@ impl DirtyLogState {
         self.last = Some((req, value.clone()));
         Ok(value)
     }
+}
+
+/// Stop outstanding supported writers inside the HTTP-held pause loop.
+/// This does not require KVM dirty logging and is reused by independent captures.
+pub(crate) fn quiesce_devices(vmm: &mut Vmm) -> Result<(), String> {
+    if vmm.instance_info.state != VmState::Paused {
+        return Err("requires HTTP-paused VM".into());
+    }
+    if !vmm.device_manager.pci_devices.virtio_devices.is_empty() {
+        return Err("PCI quiescence is not validated".into());
+    }
+    vmm.device_manager
+        .mmio_devices
+        .for_each_virtio_device(|kind, _, entry| {
+            let transport = entry
+                .inner
+                .lock()
+                .map_err(|_| "transport lock poisoned".to_string())?;
+            let mut dev = transport.locked_device();
+            match *kind {
+                2 => {
+                    let block = dev
+                        .as_mut_any()
+                        .downcast_mut::<Block>()
+                        .ok_or("unknown block implementation")?;
+                    match block {
+                        Block::Virtio(b) => b.quiesce_dirty_log()?,
+                        Block::VhostUser(_) => {
+                            return Err("external vhost-user writer unsupported".into());
+                        }
+                    }
+                }
+                1 => {
+                    dev.as_mut_any()
+                        .downcast_mut::<Net>()
+                        .ok_or("unknown net implementation")?
+                        .prepare_save();
+                }
+                19 => (),
+                _ => return Err(format!("unvalidated virtio writer type {kind}")),
+            }
+            Ok::<(), String>(())
+        })
 }
 
 #[cfg(test)]

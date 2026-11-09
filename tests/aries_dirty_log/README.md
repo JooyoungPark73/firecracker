@@ -25,3 +25,30 @@ The default TAP name is `ariesdirty`; use `--tap` to choose another absent name.
 `--mem-mib 8192` instead checks two-slot RAM layout plus CPU/block markers and reset. It does not run the payload scanner, whose host-VMA matching is deliberately restricted to the simple 256MiB fixture layout.
 
 Keep `result.json`, `api-calls.json`, `serial.log` and metrics, including failed runs. Guest marker PFNs are fixture-only instrumentation and not a proposed workload measurement mechanism. Cleanup terminates only the owned VM and removes only a TAP successfully created by this invocation. If the fixture itself is forcibly killed, inspect its owned PID/TAP before any manual cleanup. Do not delete other workloads or automatically retry failures.
+
+## Split-resource fixtures
+
+Use the same explicit binary/kernel/initrd arguments and a fresh output directory
+for each script:
+
+- `integrated_fixture.py` selects dirty, idle, census and metadata through
+  /trace-epochs. It checks rejected Resume retains the event-loop hold, queued
+  network payload appears only after a permitted Resume, pending metadata
+  validates at rotation, frozen bytes export after Resume, and real marker
+  dirty/access evidence.
+- `standalone_fixture.py` explicitly disables KVM dirty tracking and proves
+  page-idle, census, raw metadata and resident scan work independently. Three
+  access epochs check four positive markers and one untouched negative page.
+  It also checks the union read mask for metadata and scan reads.
+
+These scripts currently target the simple 256MiB marker fixture; the legacy
+script retains its separate 8GiB two-slot layout mode. The new marker helper
+adds an untouched fifth page, so rebuild the initrd before the repeated-idle
+fixture. Stock seccomp remains enabled. Scan tests deliberately use an isolated
+zero-filled marker page; real bootstrap needles should be selective.
+
+Rust unit tests additionally exercise cross-page/request scans and GPA holes,
+raw reference classification, stale generations, record reservations, dense
+match capacity, source poisoning and explicit discard cleanup. Fixture success
+does not establish universal no-miss idle detection or arbitrary guest/kernel
+compatibility. Keep individual source/binary hashes with every receipt.

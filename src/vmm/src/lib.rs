@@ -111,6 +111,7 @@ pub mod vmm_config;
 /// Module with virtual state structs.
 pub mod vstate;
 pub mod dirty_log;
+pub mod page_tracking;
 
 /// Module with initrd.
 pub mod initrd;

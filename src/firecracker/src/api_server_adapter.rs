@@ -76,13 +76,25 @@ impl ApiServerAdapter {
         Ok(())
     }
 
-    fn handle_request(&mut self, req_action: VmmAction) {
+    fn handle_request(&mut self, req_action: VmmAction) -> bool {
+        let hold = match &req_action {
+            VmmAction::Pause => Some(true),
+            VmmAction::Resume => Some(false),
+            _ => None,
+        };
         let response = self.controller.handle_request(req_action);
+        let succeeded = response.is_ok();
+        if succeeded {
+            if let Some(held) = hold {
+                self.controller.set_http_pause_held(held);
+            }
+        }
         // Send back the result.
         self.to_api
             .send(Box::new(response))
             .map_err(|_| ())
             .expect("one-shot channel closed");
+        succeeded
     }
 }
 impl MutEventSubscriber for ApiServerAdapter {
@@ -96,21 +108,21 @@ impl MutEventSubscriber for ApiServerAdapter {
             match self.from_api.try_recv() {
                 Ok(api_request) => {
                     let request_is_pause = *api_request == VmmAction::Pause;
-                    self.handle_request(*api_request);
+                    let succeeded = self.handle_request(*api_request);
 
                     // If the latest req is a pause request, temporarily switch to a mode where we
                     // do blocking `recv`s on the `from_api` receiver in a loop, until we get
                     // unpaused. The device emulation is implicitly paused since we do not
                     // relinquish control to the event manager because we're not returning from
                     // `process`.
-                    if request_is_pause {
+                    if request_is_pause && succeeded {
                         // This loop only attempts to process API requests, so things like the
                         // metric flush timerfd handling are frozen as well.
                         loop {
                             let req = self.from_api.recv().expect("Error receiving API request.");
                             let req_is_resume = *req == VmmAction::Resume;
-                            self.handle_request(*req);
-                            if req_is_resume {
+                            let succeeded = self.handle_request(*req);
+                            if req_is_resume && succeeded {
                                 break;
                             }
                         }

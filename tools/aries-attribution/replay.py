@@ -156,25 +156,44 @@ def verify_resident_census(source):
             "population_counts": True, "rich_row_identities": True}
 
 
+
+def retained_reading(source, artifact_directory=None):
+    """Resolve immutable legacy or companion inputs without a disposable-worker path."""
+    source = Path(source)
+    candidates = (source / "reading.json", source.parent / "reading.json",
+                  source.parent / "phase.json")
+    reading_path = next((path for path in candidates if path.is_file()), None)
+    if reading_path is None:
+        raise FileNotFoundError("no retained reading at " + ", ".join(map(str, candidates)))
+    reading = json.loads(reading_path.read_text())
+    mask_directory = None
+    if "accessed_gpas" not in reading:
+        from compact import expand_reading
+        if artifact_directory is not None:
+            mask_directory = Path(artifact_directory)
+        elif source.parent.parent.name == "captures" and reading.get("vm_generation"):
+            epoch = reading.get("source_epoch")
+            if not isinstance(epoch, int) or epoch < 1:
+                raise ValueError("compact companion reading requires source_epoch")
+            mask_directory = source.parents[2] / ("epoch-%06d" % epoch)
+        else:
+            # Legacy phase artifacts retain their masks beside the reading.
+            mask_directory = reading_path.parent
+        reading = expand_reading(reading, artifact_directory=mask_directory)
+    return reading, reading_path, mask_directory
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--step", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--bootstrap", type=Path)
+    parser.add_argument("--artifact-directory", type=Path,
+                        help="explicit retained compact-mask directory for a nonstandard archive layout")
     args = parser.parse_args()
     source = args.step.resolve()
     bootstrap_path = args.bootstrap or source.parent / "bootstrap.json"
     bootstrap = json.loads(bootstrap_path.read_text())
-    reading_path = source / "reading.json"
-    if reading_path.exists():
-        reading = json.loads(reading_path.read_text())
-    else:
-        # New compact epochs resolve masks beside phase.json, never worker paths.
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tsb-pages"))
-        from compact import expand_reading
-        reading_path = source.parent / "phase.json"
-        reading = expand_reading(json.loads(reading_path.read_text()), artifact_directory=reading_path.parent)
+    reading, reading_path, mask_directory = retained_reading(source, args.artifact_directory)
     frozen = FrozenMemory(source / "metadata-index.json", source / "metadata-pages.bin.gz")
     decoder = GuestDecoder.__new__(GuestDecoder)
     decoder.pid = reading["vmm_pid"]
@@ -242,12 +261,19 @@ def main():
                           source / "files.json", source / "file-namespaces.json",
                           Path(__file__).with_name("owners.py"), Path(__file__).with_name("file_names.py"),
                           Path(__file__).with_name("compression.py")) if p.exists()]
+    if mask_directory is not None:
+        paths.append(Path(__file__).with_name("compact.py"))
+        raw = json.loads(reading_path.read_text())
+        paths += [mask_directory / mask["file"] for region in raw["regions"]
+                  for mask in region["masks"].values()]
     report = {
         "schema": "aries.guest-attribution-replay.v2",
         "compression_validation": compression,
         "resident_census_validation": census,
         "passed": all(checks.values()), "checks": checks, "differences": differences,
         "source_step": str(source), "live_memory_access": False,
+        "reading_path": str(reading_path),
+        "compact_mask_directory": str(mask_directory) if mask_directory is not None else None,
         "retained_metadata_pages": len(frozen.pages),
         "replayed_metadata_pages": len(frozen.requested),
         "input_sha256": {str(p): digest(p) for p in paths},

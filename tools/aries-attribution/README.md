@@ -60,6 +60,11 @@ Run on an experimental worker:
     PYTHONPATH=tools/aries-attribution python3 -m unittest discover -s tools/aries-attribution -p 'test_*.py'
 
 Replay an existing capture with --step, --bootstrap and --output using replay.py.
+For companion captures, point --step at captures/epoch-N/attribution; replay
+finds the unchanged reading.json in its capture parent. Legacy step-local
+readings remain supported. Compact masks resolve within the retained archive;
+--artifact-directory supplies a nonstandard mask location without relying on
+the original worker's absolute path.
 Exact row parity and declared summary-version differences are reported separately.
 All layouts and kernel ELF inputs must match the running guest kernel; no guest
 kernel modification is required.

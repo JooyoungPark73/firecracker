@@ -100,6 +100,7 @@ impl Persist<'_> for Queue {
             desc_table_ptr: std::ptr::null(),
             avail_ring_ptr: std::ptr::null_mut(),
             used_ring_ptr: std::ptr::null_mut(),
+            used_ring_dirty_memory: None,
 
             next_avail: state.next_avail,
             next_used: state.next_used,

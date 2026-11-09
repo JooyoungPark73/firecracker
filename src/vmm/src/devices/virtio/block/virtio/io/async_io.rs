@@ -38,6 +38,8 @@ pub struct AsyncFileEngine {
     file: File,
     ring: IoUring<WrappedRequest>,
     completion_evt: EventFd,
+    #[cfg(test)]
+    fail_next_completion_pop: bool,
 }
 
 #[derive(Debug)]
@@ -98,6 +100,8 @@ impl AsyncFileEngine {
             file,
             ring,
             completion_evt,
+            #[cfg(test)]
+            fail_next_completion_pop: false,
         })
     }
 
@@ -234,11 +238,25 @@ impl AsyncFileEngine {
         self.ring.pop().map_err(AsyncIoError::IoUring)
     }
 
+    #[cfg(test)]
+    pub(crate) fn inject_completion_pop_error(&mut self) {
+        self.fail_next_completion_pop = true;
+    }
+
     pub fn pop(
         &mut self,
         mem: &GuestMemoryMmap,
     ) -> Result<Option<Cqe<PendingRequest>>, AsyncIoError> {
-        let cqe = self.do_pop()?.map(|cqe| {
+        let cqe = self.do_pop()?;
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_completion_pop) {
+            // Model an error after CQE consumption but before guest dirty marking.
+            assert!(cqe.is_some());
+            return Err(AsyncIoError::IO(std::io::Error::other(
+                "injected completion pop failure",
+            )));
+        }
+        let cqe = cqe.map(|cqe| {
             let count = cqe.count();
             cqe.map_user_data(|wrapped_user_data| {
                 wrapped_user_data.mark_dirty_mem_and_unwrap(mem, count)

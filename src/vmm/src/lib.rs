@@ -110,6 +110,7 @@ pub mod utils;
 pub mod vmm_config;
 /// Module with virtual state structs.
 pub mod vstate;
+pub mod dirty_log;
 
 /// Module with initrd.
 pub mod initrd;

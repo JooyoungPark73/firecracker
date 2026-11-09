@@ -1280,6 +1280,58 @@ pub mod tests {
     }
 
     #[test]
+    fn test_aries_paused_rx_reparse_after_dirty_reset() {
+        use crate::vstate::memory::{Bitmap, Bytes, GuestMemory, GuestMemoryExtension};
+        let mem = crate::vstate::memory::GuestMemoryMmap::from_regions(
+            crate::vstate::memory::anonymous(
+                [(GuestAddress(0), 2 * MAX_BUFFER_SIZE)].into_iter(),
+                true,
+                crate::vmm_config::machine_config::HugePageConfig::None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut th = TestHelper::get_default(&mem);
+        th.activate_net();
+        let target = th.data_addr() + 0x8000;
+        th.add_desc_chain(
+            NetQueue::Rx,
+            0x8000,
+            &[(0, MAX_BUFFER_SIZE as u32, VIRTQ_DESC_F_WRITE)],
+        );
+        th.event_manager.run_with_timeout(100).unwrap();
+        // No vCPU exists in this fixture: the same event loop can write RX
+        // buffers while a production VM's vCPUs are paused.
+        th.net().prepare_save();
+        mem.reset_dirty();
+        let frame = inject_tap_tx_frame(&th.net(), 512);
+        for _ in 0..3 {
+            th.event_manager.run_with_timeout(100).unwrap();
+        }
+        let mut actual = vec![0u8; 512];
+        mem.read_slice(&mut actual, GuestAddress(target)).unwrap();
+        assert_eq!(&actual[vnet_hdr_len()..], &frame[vnet_hdr_len()..]);
+        assert!(
+            mem.find_region(GuestAddress(target))
+                .unwrap()
+                .bitmap()
+                .dirty_at(target as usize)
+        );
+        assert!(th.rxq.used.idx.get() > 0);
+        th.net().prepare_save();
+        mem.reset_dirty();
+        for _ in 0..2 {
+            th.event_manager.run_with_timeout(10).unwrap();
+        }
+        assert!(
+            !mem.find_region(GuestAddress(target))
+                .unwrap()
+                .bitmap()
+                .dirty_at(target as usize)
+        );
+    }
+
+    #[test]
     fn test_rx_missing_queue_signal() {
         let mem = single_region_mem(2 * MAX_BUFFER_SIZE);
         let mut th = TestHelper::get_default(&mem);

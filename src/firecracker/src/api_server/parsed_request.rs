@@ -81,6 +81,9 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Get, "vm", None) if path_tokens.next() == Some("config") => {
                 Ok(ParsedRequest::new_sync(VmmAction::GetFullVmConfig))
             }
+            (Method::Put, "dirty-log", Some(body)) if path_tokens.next().is_none() => Ok(
+                ParsedRequest::new_sync(VmmAction::DirtyLog(serde_json::from_slice(body.raw())?)),
+            ),
             (Method::Get, "machine-config", None) => parse_get_machine_config(),
             (Method::Get, "mmds", None) => parse_get_mmds(),
             (Method::Get, _, Some(_)) => method_to_error(Method::Get),
@@ -167,6 +170,7 @@ impl ParsedRequest {
                     Self::success_response_with_data(machine_config)
                 }
                 VmmData::MmdsValue(value) => Self::success_response_with_mmds_value(value),
+                VmmData::DirtyLog(value) => Self::success_response_with_data(value),
                 VmmData::BalloonConfig(balloon_config) => {
                     Self::success_response_with_data(balloon_config)
                 }
@@ -410,6 +414,34 @@ pub mod tests {
     }
 
     #[test]
+    fn test_aries_dirty_route_and_malformed_requests() {
+        for (body, valid) in [
+            (r#"{"operation":"arm","epoch":1}"#, true),
+            (r#"{"operation":"collect","epoch":1,"next_epoch":2}"#, true),
+            (r#"{"operation":"arm","epoch":1,"unexpected":true}"#, false),
+            (r#"{"operation":"arm","epoch":-1}"#, false),
+            (r#"{"operation":"arm"}"#, false),
+            ("not-json", false),
+        ] {
+            let (mut sender, receiver) = UnixStream::pair().unwrap();
+            let mut connection = HttpConnection::new(receiver);
+            sender
+                .write_all(http_request("PUT", "/dirty-log", Some(body)).as_bytes())
+                .unwrap();
+            connection.try_read().unwrap();
+            let req = connection.pop_parsed_request().unwrap();
+            let parsed = ParsedRequest::try_from(&req);
+            assert_eq!(parsed.is_ok(), valid, "{body}");
+            if valid {
+                assert!(matches!(
+                    parsed.unwrap().action,
+                    RequestAction::Sync(action) if matches!(*action,VmmAction::DirtyLog(_))
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn test_checked_id() {
         checked_id("dummy").unwrap();
         checked_id("dummy_1").unwrap();
@@ -562,6 +594,9 @@ pub mod tests {
                 VmmData::MachineConfiguration(cfg) => {
                     http_response(&serde_json::to_string(cfg).unwrap(), 200)
                 }
+                VmmData::DirtyLog(value) => {
+                    http_response(&serde_json::to_string(value).unwrap(), 200)
+                }
                 VmmData::MmdsValue(value) => {
                     http_response(&serde_json::to_string(value).unwrap(), 200)
                 }
@@ -585,6 +620,7 @@ pub mod tests {
             ..Default::default()
         }));
         verify_ok_response_with(VmmData::Empty);
+        verify_ok_response_with(VmmData::DirtyLog(serde_json::json!({"epoch":1})));
         verify_ok_response_with(VmmData::FullVmConfig(VmmConfig::default()));
         verify_ok_response_with(VmmData::MachineConfiguration(MachineConfig::default()));
         verify_ok_response_with(VmmData::MmdsValue(serde_json::from_str("{}").unwrap()));

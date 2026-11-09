@@ -53,6 +53,8 @@ pub enum VmmAction {
     /// Create a snapshot using as input the `CreateSnapshotParams`. This action can only be called
     /// after the microVM has booted and only when the microVM is in `Paused` state.
     CreateSnapshot(CreateSnapshotParams),
+    /// ARIES continuous dirty epoch request.
+    DirtyLog(crate::dirty_log::DirtyLogRequest),
     /// Get the balloon device configuration.
     GetBalloonConfig,
     /// Get the ballon device latest statistics.
@@ -189,6 +191,8 @@ pub enum VmmData {
     MachineConfiguration(MachineConfig),
     /// Mmds contents.
     MmdsValue(serde_json::Value),
+    /// ARIES dirty epoch result with separate CPU and device maps.
+    DirtyLog(serde_json::Value),
     /// The microVM instance information.
     InstanceInformation(InstanceInfo),
     /// The microVM version.
@@ -441,7 +445,8 @@ impl<'a> PrebootApiController<'a> {
             UpdateMachineConfiguration(config) => self.update_machine_config(config),
             SetEntropyDevice(config) => self.set_entropy_device(config),
             // Operations not allowed pre-boot.
-            CreateSnapshot(_)
+            DirtyLog(_)
+            | CreateSnapshot(_)
             | FlushMetrics
             | Pause
             | Resume
@@ -606,6 +611,7 @@ impl<'a> PrebootApiController<'a> {
 /// Enables RPC interaction with a running Firecracker VMM.
 #[derive(Debug)]
 pub struct RuntimeApiController {
+    dirty_log: crate::dirty_log::DirtyLogState,
     vmm: Arc<Mutex<Vmm>>,
     vm_resources: VmResources,
 }
@@ -624,7 +630,19 @@ impl RuntimeApiController {
         use self::VmmAction::*;
         match request {
             // Supported operations allowed post-boot.
-            CreateSnapshot(snapshot_create_cfg) => self.create_snapshot(&snapshot_create_cfg),
+            DirtyLog(req) => self
+                .dirty_log
+                .transact(&mut self.vmm.lock().expect("Poisoned lock"), req)
+                .map(VmmData::DirtyLog)
+                .map_err(VmmActionError::NotSupported),
+            CreateSnapshot(snapshot_create_cfg) => {
+                if self.dirty_log.started() {
+                    return Err(VmmActionError::NotSupported(
+                        "snapshot resets conflict with measurement dirty epochs".into(),
+                    ));
+                }
+                self.create_snapshot(&snapshot_create_cfg)
+            }
             FlushMetrics => self.flush_metrics(),
             GetBalloonConfig => self
                 .vmm
@@ -693,7 +711,11 @@ impl RuntimeApiController {
 
     /// Creates a new `RuntimeApiController`.
     pub fn new(vm_resources: VmResources, vmm: Arc<Mutex<Vmm>>) -> Self {
-        Self { vmm, vm_resources }
+        Self {
+            vmm,
+            vm_resources,
+            dirty_log: Default::default(),
+        }
     }
 
     /// Pauses the microVM by pausing the vCPUs.
@@ -1143,6 +1165,55 @@ mod tests {
         )));
         #[cfg(target_arch = "x86_64")]
         check_unsupported(preboot_request(VmmAction::SendCtrlAltDel));
+    }
+
+    #[test]
+    fn test_aries_dirty_preboot_and_snapshot_conflicts() {
+        use crate::dirty_log::DirtyLogRequest;
+        assert!(matches!(
+            preboot_request(VmmAction::DirtyLog(DirtyLogRequest {
+                operation: "arm".into(),
+                epoch: 1,
+                next_epoch: None
+            })),
+            Err(VmmActionError::OperationNotSupportedPreBoot)
+        ));
+        let (vmm, _events) = crate::test_utils::create_vmm(None, true, false, false);
+        vmm.lock()
+            .unwrap()
+            .device_manager
+            .mmio_devices
+            .virtio_devices
+            .retain(|(kind, _), _| *kind != 5 && *kind != 4);
+        let mut runtime = RuntimeApiController::new(VmResources::default(), vmm);
+        runtime
+            .handle_request(VmmAction::DirtyLog(DirtyLogRequest {
+                operation: "arm".into(),
+                epoch: 1,
+                next_epoch: None,
+            }))
+            .unwrap();
+        for closed in [false, true] {
+            if closed {
+                runtime
+                    .handle_request(VmmAction::DirtyLog(DirtyLogRequest {
+                        operation: "collect".into(),
+                        epoch: 1,
+                        next_epoch: None,
+                    }))
+                    .unwrap();
+            }
+            let error = runtime
+                .handle_request(VmmAction::CreateSnapshot(CreateSnapshotParams {
+                    snapshot_type: SnapshotType::Full,
+                    snapshot_path: PathBuf::new(),
+                    mem_file_path: PathBuf::new(),
+                }))
+                .unwrap_err();
+            assert!(
+                matches!(error,VmmActionError::NotSupported(ref message) if message.contains("snapshot resets conflict"))
+            );
+        }
     }
 
     fn runtime_request(request: VmmAction) -> Result<VmmData, VmmActionError> {

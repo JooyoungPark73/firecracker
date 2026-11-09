@@ -134,3 +134,69 @@ available. Supply the original matching guest ELF and create a configuration:
 The command refuses a different ELF hash or an existing output. Other kernels
 need independently generated and validated base, owner and name layouts. Keep
 bootstrap ELF-hash, VMCOREINFO, KASLR/page-table and process/VMA checks enabled.
+
+## Reproduce the known-object native fixture
+
+This x86-64 fixture uses a disposable 256 MiB VM, an ordinary userspace helper,
+and an initramfs-backed file. It checks the file's namespace path and process
+mapping, anonymous ownership, capture consistency and exact replay. It does not
+call a model or solve a benchmark task. Guest /proc/self/pagemap is used only by
+the controlled helper to establish its known GPA oracle.
+
+On an isolated Linux worker, install Python 3, musl-gcc, a **statically linked**
+BusyBox, cpio and the normal Firecracker/KVM prerequisites. The VMM needs the
+host page-idle/PFN permissions described in
+[the tracer guide](../../docs/firecracker-tracer.md); the example runs the
+fixture as root. Supply a tracer binary built from this branch and the matching
+kernel ELF for the included layout profile. The commands below construct the
+same helper/initrd used by the native companion gate. Use a fresh directory;
+the fixture also refuses to reuse its output directory.
+
+Run from the Firecracker repository root, replacing the two input paths:
+
+```bash
+tracer_binary=/absolute/path/to/firecracker
+kernel_elf=/absolute/path/to/the-matching-vmlinux
+fixture_root="$PWD/.cache/aries-attribution-known-object-001"
+
+test ! -e "$fixture_root"
+mkdir -p "$fixture_root/root/bin" "$fixture_root/root/dev" \
+  "$fixture_root/root/proc" "$fixture_root/root/sys"
+cp /bin/busybox "$fixture_root/root/bin/busybox"
+musl-gcc -static -O2 -g tools/aries-attribution/fixtures/known_object.c \
+  -o "$fixture_root/root/known-object"
+python3 - "$fixture_root/root/known-file" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes(b"K" * 4096)
+PY
+cat > "$fixture_root/root/init" <<'INIT'
+#!/bin/busybox sh
+set -e
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+exec /known-object
+INIT
+chmod +x "$fixture_root/root/init"
+(
+  cd "$fixture_root/root"
+  find . -print0 | cpio --null -o --format=newc --owner=0:0
+) > "$fixture_root/initrd.cpio"
+
+python3 tools/aries-attribution/make_config.py \
+  --kernel-elf "$kernel_elf" --output "$fixture_root/config.json"
+sudo python3 tools/aries-attribution/fixtures/native_companion.py \
+  --binary "$tracer_binary" --kernel "$kernel_elf" \
+  --initrd "$fixture_root/initrd.cpio" --config "$fixture_root/config.json" \
+  --out "$fixture_root/native-001"
+```
+
+Inspect native-001/result.json, both capture validation receipts, and
+native-001/replay/replay-validation.json. Result records pin the binary,
+kernel, initrd, configuration and companion source hashes. The fixture creates
+and reaps only its own VM, creates no TAP, and retains failed captures. A pass
+requires valid bootstrap and attribution consistency, known associations, exact
+replay and successful cleanup. The known file is correctly classified as shmem
+because it lives in initramfs. This small fixture is not a large-workload
+latency or universal host-idle coverage test.

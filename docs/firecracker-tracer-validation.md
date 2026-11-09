@@ -122,3 +122,14 @@ Its runtime source manifest SHA256:
 The source build and focused receipt are archived separately from the preceding
 successful native fixtures. The final downstream harness gate is external to
 this repository's unit/native fixture evidence.
+
+## Downstream native harness gate
+
+The no-cost ARIES native harness gate passed using final binary SHA256
+`b056022604b4f43f2af03583fd8528041e5d438241dde0e9498bd730638898cb`.
+The harness completed successfully, confirmed sandbox isolation, and completed
+cleanup. The fixture's task score was **0**, as expected: it exercises tracer
+and harness integration and does not solve the fix-git task. This establishes
+the bounded integration gate, not benchmark task success or a paid workload
+result. Capture/replay and chronology audit receipts are retained separately
+with the downstream run evidence; bulk logs are not included in this repository.

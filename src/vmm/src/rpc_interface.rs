@@ -1311,6 +1311,7 @@ mod tests {
                 snapshot_path: PathBuf::new(),
                 mem_file_path: PathBuf::new(),
                 sync_snapshot_files: true,
+                retain_source_vsock: false,
             },
         )));
         #[cfg(target_arch = "x86_64")]
@@ -1403,6 +1404,7 @@ mod tests {
                 },
                 track_dirty_pages: false,
                 resume_vm: false,
+                reset_vsock: false,
                 network_overrides: vec![],
                 drive_overrides: vec![],
                 vsock_override: None,

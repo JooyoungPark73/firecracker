@@ -113,6 +113,7 @@ fn parse_put_snapshot_load(body: &Body) -> Result<ParsedRequest, RequestError> {
         drive_overrides: snapshot_config.drive_overrides,
         vsock_override: snapshot_config.vsock_override,
         clock_realtime: snapshot_config.clock_realtime,
+        reset_vsock: snapshot_config.reset_vsock,
         huge_pages: snapshot_config.huge_pages,
     };
 
@@ -138,6 +139,36 @@ mod tests {
     use crate::api_server::parsed_request::tests::{depr_action_from_req, vmm_action_from_request};
 
     #[test]
+    fn test_explicit_vsock_snapshot_policy() {
+        let create = parse_put_snapshot(
+            &Body::new(
+                r#"{
+            "snapshot_path":"state", "mem_file_path":"memory", "retain_source_vsock":true
+        }"#,
+            ),
+            Some("create"),
+        )
+        .unwrap();
+        match vmm_action_from_request(create) {
+            VmmAction::CreateSnapshot(params) => {
+                assert!(params.retain_source_vsock);
+                assert!(params.sync_snapshot_files);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+        let load = parse_put_snapshot(&Body::new(r#"{
+            "snapshot_path":"state", "mem_backend":{"backend_type":"File","backend_path":"memory"}, "reset_vsock":true
+        }"#), Some("load")).unwrap();
+        match vmm_action_from_request(load) {
+            VmmAction::LoadSnapshot(params) => {
+                assert!(params.reset_vsock);
+                assert!(!params.resume_vm);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_parse_put_snapshot() {
         use std::path::PathBuf;
 
@@ -153,6 +184,7 @@ mod tests {
             snapshot_path: PathBuf::from("foo"),
             mem_file_path: PathBuf::from("bar"),
             sync_snapshot_files: true,
+            retain_source_vsock: false,
         };
         assert_eq!(
             vmm_action_from_request(parse_put_snapshot(&Body::new(body), Some("create")).unwrap()),
@@ -170,6 +202,7 @@ mod tests {
             snapshot_path: PathBuf::from("foo"),
             mem_file_path: PathBuf::from("bar"),
             sync_snapshot_files: false,
+            retain_source_vsock: false,
         };
         assert_eq!(
             vmm_action_from_request(parse_put_snapshot(&Body::new(body), Some("create")).unwrap()),
@@ -185,6 +218,7 @@ mod tests {
             snapshot_path: PathBuf::from("foo"),
             mem_file_path: PathBuf::from("bar"),
             sync_snapshot_files: true,
+            retain_source_vsock: false,
         };
         assert_eq!(
             vmm_action_from_request(parse_put_snapshot(&Body::new(body), Some("create")).unwrap()),
@@ -213,6 +247,7 @@ mod tests {
             },
             track_dirty_pages: false,
             resume_vm: false,
+            reset_vsock: false,
             network_overrides: vec![],
             drive_overrides: vec![],
             vsock_override: None,
@@ -247,6 +282,7 @@ mod tests {
             },
             track_dirty_pages: true,
             resume_vm: false,
+            reset_vsock: false,
             network_overrides: vec![],
             drive_overrides: vec![],
             vsock_override: None,
@@ -282,6 +318,7 @@ mod tests {
             },
             track_dirty_pages: false,
             resume_vm: true,
+            reset_vsock: false,
             network_overrides: vec![],
             drive_overrides: vec![],
             vsock_override: None,
@@ -328,6 +365,7 @@ mod tests {
             },
             track_dirty_pages: false,
             resume_vm: true,
+            reset_vsock: false,
             network_overrides: vec![NetworkOverride {
                 iface_id: String::from("eth0"),
                 host_dev_name: String::from("vmtap2"),
@@ -365,6 +403,7 @@ mod tests {
             },
             track_dirty_pages: false,
             resume_vm: true,
+            reset_vsock: false,
             network_overrides: vec![],
             drive_overrides: vec![],
             vsock_override: None,

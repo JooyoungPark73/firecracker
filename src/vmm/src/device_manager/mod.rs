@@ -747,15 +747,16 @@ impl std::fmt::Debug for DeviceRestoreArgs<'_> {
     }
 }
 
-impl<'a> Persist<'a> for DeviceManager {
-    type State = DevicesState;
-    type ConstructorArgs = DeviceRestoreArgs<'a>;
-    type Error = DeviceManagerPersistError;
-
-    fn save(&self) -> Self::State {
+impl DeviceManager {
+    /// Saves devices while optionally preserving source vsock connections.
+    pub fn save_with_options(&self, retain_source_vsock: bool) -> DevicesState {
         let virtio_state = match &self.virtio_devices {
-            VirtioDevices::Mmio(mmio_devices) => VirtioDevicesState::Mmio(mmio_devices.save()),
-            VirtioDevices::Pci(pci_devices) => VirtioDevicesState::Pci(pci_devices.save()),
+            VirtioDevices::Mmio(mmio_devices) => {
+                VirtioDevicesState::Mmio(mmio_devices.save_with_options(retain_source_vsock))
+            }
+            VirtioDevices::Pci(pci_devices) => {
+                VirtioDevicesState::Pci(pci_devices.save_with_options(retain_source_vsock))
+            }
             // Enclaves are not snapshottable; mirror the previous behaviour of saving an
             // empty MMIO state.
             VirtioDevices::Enclave(_) => VirtioDevicesState::default(),
@@ -767,6 +768,16 @@ impl<'a> Persist<'a> for DeviceManager {
             acpi_state: self.acpi_devices.save(),
             serial_state: self.serial_state(),
         }
+    }
+}
+
+impl<'a> Persist<'a> for DeviceManager {
+    type State = DevicesState;
+    type ConstructorArgs = DeviceRestoreArgs<'a>;
+    type Error = DeviceManagerPersistError;
+
+    fn save(&self) -> Self::State {
+        self.save_with_options(false)
     }
 
     fn restore(

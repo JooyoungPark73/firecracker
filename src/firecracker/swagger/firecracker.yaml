@@ -1848,6 +1848,14 @@ definitions:
           contents. Block device backing files are always fsync'd regardless of
           this setting.
 
+      retain_source_vsock:
+        type: boolean
+        default: false
+        description:
+          Preserve active vsock connections in the source VM when taking this
+          snapshot. Backend connections are not captured. Load this snapshot
+          with reset_vsock enabled so the restored guest drops stale connections.
+
   NetworkOverride:
     type: object
     description:
@@ -1927,6 +1935,13 @@ definitions:
         type: boolean
         description:
           When set to true, the vm is also resumed if the snapshot load is successful.
+      reset_vsock:
+        type: boolean
+        default: false
+        description:
+          Publish a transport reset in an activated restored vsock device before
+          the guest resumes. Required for snapshots made with retain_source_vsock.
+          Existing listening sockets survive; established connections must reconnect.
       network_overrides:
         type: array
         description: Network host device names to override

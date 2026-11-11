@@ -678,6 +678,23 @@ is updated to reflect the current `guest_cid`. More details about this event can
 be found in the official Virtio document
 [here](https://docs.oasis-open.org/virtio/virtio/v1.1/csprd01/virtio-v1.1-csprd01.html#x1-4080006).
 
+This fork also supports continuing the source without resetting its established
+connections. Set `retain_source_vsock: true` on `PUT /snapshot/create` while the
+VM is paused, then resume the source normally. Other devices still perform
+their usual snapshot preparation, including block-device synchronization.
+
+Backend vsock connections are not serialized. When loading a snapshot created
+with this option, set `reset_vsock: true` on `PUT /snapshot/load`. Firecracker
+publishes the reset after restoring device/IRQ state and before starting vCPUs.
+It does not duplicate a reset already pending in the snapshot. Established
+guest connections close on resume; listening sockets remain available for
+reconnection. Loading fails if an activated device cannot accept the reset.
+
+Both options default to `false`, preserving the existing snapshot behavior and
+serialized state format. The snapshot manager must record the selected policy
+and pair source retention with reset on load. These options do not preserve
+external peers, copy writable disks or reconstruct runtime task metadata.
+
 ## VMGenID device limitation
 
 During snashot resume, Firecracker updates the 16-byte generation ID of the

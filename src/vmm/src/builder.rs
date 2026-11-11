@@ -441,6 +441,8 @@ pub enum BuildMicrovmFromSnapshotError {
     RestoreVcpus(#[from] VcpuError),
     /// Failed to restore devices: {0}
     RestoreDevices(#[from] DeviceManagerPersistError),
+    /// Failed to reset restored vsock connections: {0}
+    ResetVsock(#[from] crate::devices::DeviceError),
     /// clock_realtime is not supported on aarch64.
     UnsupportedClockRealtime,
 }
@@ -459,6 +461,7 @@ pub fn build_microvm_from_snapshot(
     seccomp_filters: &BpfThreadMap,
     vm_resources: &mut VmResources,
     clock_realtime: bool,
+    reset_vsock: bool,
 ) -> Result<Arc<Mutex<Vmm>>, BuildMicrovmFromSnapshotError> {
     // Build Vmm.
     debug!("event_start: build microvm from snapshot");
@@ -538,6 +541,15 @@ pub fn build_microvm_from_snapshot(
     #[allow(unused_mut)]
     let mut device_manager =
         DeviceManager::restore(device_ctor_args, &microvm_state.device_states)?;
+
+    // Device activation, restored transport state and KVM IRQ state must all
+    // exist before publishing this event. Do it before starting any vCPU.
+    if reset_vsock && let Some(vsock) = vm_resources.vsock.get() {
+        vsock
+            .lock()
+            .expect("Poisoned vsock lock")
+            .reset_after_restore()?;
+    }
 
     let vmm = Vmm {
         instance_info: instance_info.clone(),

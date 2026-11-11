@@ -51,6 +51,10 @@ pub struct CreateSnapshotParams {
     /// Activated virtio-block devices are always fsync'd, independently of this.
     #[serde(default = "default_sync_snapshot_files")]
     pub sync_snapshot_files: bool,
+    /// Preserve the source VM's vsock connections while capturing its state.
+    /// The restored VM must use reset_vsock because backend connections are not saved.
+    #[serde(default)]
+    pub retain_source_vsock: bool,
 }
 
 /// Default value for [CreateSnapshotParams::sync_snapshot_files].
@@ -125,6 +129,8 @@ pub struct LoadSnapshotParams {
     /// When set to true, the vm is also resumed if the snapshot load
     /// is successful.
     pub resume_vm: bool,
+    /// Reset active vsock connections in the restored guest before it resumes.
+    pub reset_vsock: bool,
     /// The network devices to override on load.
     pub network_overrides: Vec<NetworkOverride>,
     /// Block devices whose backing paths should be replaced.
@@ -163,6 +169,9 @@ pub struct LoadSnapshotConfig {
     /// Whether or not to resume the vm post snapshot load.
     #[serde(default)]
     pub resume_vm: bool,
+    /// Reset active vsock connections in the restored guest before it resumes.
+    #[serde(default)]
+    pub reset_vsock: bool,
     /// The network devices to override on load.
     #[serde(default)]
     pub network_overrides: Vec<NetworkOverride>,

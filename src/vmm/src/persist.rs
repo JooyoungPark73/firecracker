@@ -174,7 +174,7 @@ pub fn create_snapshot(
     params: &CreateSnapshotParams,
 ) -> Result<(), CreateSnapshotError> {
     let microvm_state = vmm
-        .save_state(vm_info)
+        .save_state_with_options(vm_info, params.retain_source_vsock)
         .map_err(CreateSnapshotError::MicrovmState)?;
 
     snapshot_state_to_file(
@@ -518,6 +518,7 @@ pub fn restore_from_snapshot(
         seccomp_filters,
         vm_resources,
         params.clock_realtime,
+        params.reset_vsock,
     )
     .map_err(RestoreFromSnapshotError::Build)
 }

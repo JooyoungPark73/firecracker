@@ -356,12 +356,9 @@ impl<'a> Debug for PciDevicesConstructorArgs<'a> {
     }
 }
 
-impl<'a> Persist<'a> for PciDevices {
-    type State = PciDevicesState;
-    type ConstructorArgs = PciDevicesConstructorArgs<'a>;
-    type Error = DevicePersistError;
-
-    fn save(&self) -> Self::State {
+impl PciDevices {
+    /// Saves devices while optionally preserving source vsock connections.
+    pub fn save_with_options(&self, retain_source_vsock: bool) -> PciDevicesState {
         let mut state = PciDevicesState::default();
 
         for pci_dev in self.virtio_devices.values() {
@@ -371,7 +368,9 @@ impl<'a> Persist<'a> for PciDevices {
             // so that, if we modify the transport state while preparing the device, e.g. sending
             // an interrupt to the guest, this is correctly captured in the saved transport state.
             let mut locked_virtio_dev = virtio_dev.lock().expect("Poisoned lock");
-            locked_virtio_dev.prepare_save();
+            if !retain_source_vsock || locked_virtio_dev.device_type() != VirtioDeviceType::Vsock {
+                locked_virtio_dev.prepare_save();
+            }
             let transport_state = locked_pci_dev.state();
 
             let sbdf = transport_state.sbdf;
@@ -499,6 +498,16 @@ impl<'a> Persist<'a> for PciDevices {
         }
 
         state
+    }
+}
+
+impl<'a> Persist<'a> for PciDevices {
+    type State = PciDevicesState;
+    type ConstructorArgs = PciDevicesConstructorArgs<'a>;
+    type Error = DevicePersistError;
+
+    fn save(&self) -> Self::State {
+        self.save_with_options(false)
     }
 
     fn restore(

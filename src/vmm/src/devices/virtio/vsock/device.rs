@@ -252,6 +252,15 @@ where
         Ok(have_used && queue.prepare_kick())
     }
 
+    /// Reset restored connections without queueing a second reset if the
+    /// snapshot already contains an event awaiting acknowledgement.
+    pub fn reset_after_restore(&mut self) -> Result<(), DeviceError> {
+        if self.device_state.is_activated() && !self.pending_event_ack {
+            self.send_transport_reset_event()?;
+        }
+        Ok(())
+    }
+
     // Send TRANSPORT_RESET_EVENT to driver. According to specs, the driver shuts down established
     // connections and the guest_cid configuration field is fetched again. Existing listen sockets
     // remain but their CID is updated to reflect the current guest_cid.
@@ -721,6 +730,40 @@ mod tests {
         // Must not panic, must not arm the gate.
         ctx.device.prepare_save();
 
+        assert!(!ctx.device.pending_event_ack);
+    }
+
+    #[test]
+    fn test_restore_reset_queues_once() {
+        let test_ctx = TestContext::new();
+        let mut ctx = test_ctx.create_event_handler_context();
+        ctx.mock_activate(test_ctx.mem.clone(), test_ctx.interrupt.clone());
+        publish_evq_descriptor(&mut ctx);
+        ctx.device.reset_after_restore().unwrap();
+        assert!(ctx.device.pending_event_ack);
+        assert_eq!(ctx.guest_evvq.used.idx.get(), 1);
+        // A legacy snapshot may already contain this pending event. Do not
+        // consume another descriptor or fail merely because the queue is empty.
+        ctx.device.reset_after_restore().unwrap();
+        assert_eq!(ctx.guest_evvq.used.idx.get(), 1);
+    }
+
+    #[test]
+    fn test_restore_reset_propagates_empty_queue() {
+        let test_ctx = TestContext::new();
+        let mut ctx = test_ctx.create_event_handler_context();
+        ctx.mock_activate(test_ctx.mem.clone(), test_ctx.interrupt.clone());
+        assert!(matches!(
+            ctx.device.reset_after_restore(),
+            Err(DeviceError::VsockError(VsockError::EmptyQueue))
+        ));
+        assert!(!ctx.device.pending_event_ack);
+    }
+
+    #[test]
+    fn test_restore_reset_inactive_is_a_noop() {
+        let mut ctx = TestContext::new();
+        ctx.device.reset_after_restore().unwrap();
         assert!(!ctx.device.pending_event_ack);
     }
 

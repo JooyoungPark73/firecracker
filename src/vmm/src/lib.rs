@@ -127,7 +127,6 @@ use std::time::Duration;
 
 use device_manager::DeviceManager;
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
-use snapshot::Persist;
 use vm_memory::GuestMemoryBackend;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::terminal::Terminal;
@@ -513,6 +512,15 @@ impl Vmm {
 
     /// Saves the state of a paused Microvm.
     pub fn save_state(&mut self, vm_info: &VmInfo) -> Result<MicrovmState, MicrovmStateError> {
+        self.save_state_with_options(vm_info, false)
+    }
+
+    /// Saves state with an explicit source vsock connection policy.
+    pub fn save_state_with_options(
+        &mut self,
+        vm_info: &VmInfo,
+        retain_source_vsock: bool,
+    ) -> Result<MicrovmState, MicrovmStateError> {
         self.check_unsnapshottable_devices()?;
 
         // We need to save device state before saving KVM state.
@@ -520,7 +528,7 @@ impl Vmm {
         // might modify the VirtIO transport and send an interrupt to the guest. If we save KVM
         // state before we save device state, that interrupt will never be delivered to the guest
         // upon resuming from the snapshot.
-        let device_states = self.device_manager.save();
+        let device_states = self.device_manager.save_with_options(retain_source_vsock);
         let kvm_vm = self
             .vm
             .as_kvm()

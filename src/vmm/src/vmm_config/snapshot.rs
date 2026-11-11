@@ -68,6 +68,16 @@ pub struct NetworkOverride {
     pub host_dev_name: String,
 }
 
+/// Selects the backing path for a virtio block device during snapshot restore.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveOverride {
+    /// Identifier of the block device in the snapshot.
+    pub drive_id: String,
+    /// Path to the replacement backing file or block device.
+    pub path_on_host: String,
+}
+
 /// Allows for changing the host UDS of the vsock backend during snapshot restore
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub struct VsockOverride {
@@ -117,6 +127,8 @@ pub struct LoadSnapshotParams {
     pub resume_vm: bool,
     /// The network devices to override on load.
     pub network_overrides: Vec<NetworkOverride>,
+    /// Block devices whose backing paths should be replaced.
+    pub drive_overrides: Vec<DriveOverride>,
     /// When set, the vsock backend UDS path will be overridden
     pub vsock_override: Option<VsockOverride>,
     /// [x86_64 only] When set to true, passes `KVM_CLOCK_REALTIME` to `KVM_SET_CLOCK` on restore,
@@ -154,6 +166,9 @@ pub struct LoadSnapshotConfig {
     /// The network devices to override on load.
     #[serde(default)]
     pub network_overrides: Vec<NetworkOverride>,
+    /// Block devices whose backing paths should be replaced.
+    #[serde(default)]
+    pub drive_overrides: Vec<DriveOverride>,
     /// Whether or not to override the vsock backend UDS path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vsock_override: Option<VsockOverride>,

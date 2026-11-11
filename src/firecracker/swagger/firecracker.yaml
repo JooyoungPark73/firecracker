@@ -1878,6 +1878,20 @@ definitions:
         description:
           The new path for the backing Unix Domain Socket.
 
+  DriveOverride:
+    type: object
+    description: Replaces a virtio block device's backing path on snapshot restore.
+    required:
+      - drive_id
+      - path_on_host
+    properties:
+      drive_id:
+        type: string
+        description: Identifier of the block device in the saved snapshot.
+      path_on_host:
+        type: string
+        description: Path to a compatible backing file or block device.
+
   SnapshotLoadParams:
     type: object
     description:
@@ -1918,6 +1932,12 @@ definitions:
         description: Network host device names to override
         items:
           $ref: "#/definitions/NetworkOverride"
+      drive_overrides:
+        type: array
+        x-omitempty: true
+        description: Virtio block backing paths to replace before opening the saved drives.
+        items:
+          $ref: "#/definitions/DriveOverride"
       vsock_override:
         $ref: "#/definitions/VsockOverride"
         description:

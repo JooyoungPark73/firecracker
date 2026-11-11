@@ -3,6 +3,7 @@
 
 //! Defines state structures for saving/restoring a Firecracker microVM.
 
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -29,6 +30,7 @@ use crate::device_manager::{DevicePersistError, DevicesState};
 // Re-exported so external crates inspecting a `MicrovmState` snapshot can match on the
 // serialised virtio transport variant.
 pub use crate::device_manager::VirtioDevicesState;
+use crate::devices::virtio::block::persist::BlockState;
 use crate::logger::{info, warn};
 use crate::resources::VmResources;
 use crate::seccomp::BpfThreadMap;
@@ -382,6 +384,34 @@ pub fn restore_from_snapshot(
     vm_resources: &mut VmResources,
 ) -> Result<Arc<Mutex<Vmm>>, RestoreFromSnapshotError> {
     let mut microvm_state = snapshot_state_from_file(&params.snapshot_path)?;
+    let mut overridden_drives = HashSet::new();
+    for entry in &params.drive_overrides {
+        if !overridden_drives.insert(entry.drive_id.as_str()) {
+            return Err(
+                SnapshotStateFromFileError::DuplicateDriveOverride(entry.drive_id.clone()).into(),
+            );
+        }
+        let state = match &mut microvm_state.device_states.virtio_state {
+            VirtioDevicesState::Mmio(state) => state
+                .block_devices
+                .iter_mut()
+                .find(|device| device.device_id == entry.drive_id)
+                .map(|device| &mut device.device_state),
+            VirtioDevicesState::Pci(state) => state
+                .block_devices
+                .iter_mut()
+                .find(|device| device.device_id == entry.drive_id)
+                .map(|device| &mut device.device_state),
+        };
+        match state {
+            Some(BlockState::Virtio(state)) => state.set_disk_path(&entry.path_on_host),
+            _ => {
+                return Err(
+                    SnapshotStateFromFileError::UnknownVirtioDrive(entry.drive_id.clone()).into(),
+                );
+            }
+        }
+    }
     for entry in &params.network_overrides {
         // Only the active transport carries virtio device state, so we look at whichever
         // variant this snapshot was saved with. The MMIO and PCI transports wrap their net
@@ -503,6 +533,10 @@ pub enum SnapshotStateFromFileError {
     UnknownNetworkDevice,
     /// Unknown Vsock Device.
     UnknownVsockDevice,
+    /// Unknown virtio block drive: {0}
+    UnknownVirtioDrive(String),
+    /// Duplicate drive override: {0}
+    DuplicateDriveOverride(String),
 }
 
 fn snapshot_state_from_file(

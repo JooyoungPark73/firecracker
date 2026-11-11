@@ -65,6 +65,13 @@ pub struct VirtioBlockState {
     discard_sector_alignment: u32,
 }
 
+impl VirtioBlockState {
+    pub(crate) fn set_disk_path(&mut self, path: &str) {
+        self.disk_path.clear();
+        self.disk_path.push_str(path);
+    }
+}
+
 impl Persist<'_> for VirtioBlock {
     type State = VirtioBlockState;
     type ConstructorArgs = BlockConstructorArgs;

@@ -110,6 +110,7 @@ fn parse_put_snapshot_load(body: &Body) -> Result<ParsedRequest, RequestError> {
             || snapshot_config.track_dirty_pages,
         resume_vm: snapshot_config.resume_vm,
         network_overrides: snapshot_config.network_overrides,
+        drive_overrides: snapshot_config.drive_overrides,
         vsock_override: snapshot_config.vsock_override,
         clock_realtime: snapshot_config.clock_realtime,
         huge_pages: snapshot_config.huge_pages,
@@ -129,7 +130,8 @@ fn parse_put_snapshot_load(body: &Body) -> Result<ParsedRequest, RequestError> {
 #[cfg(test)]
 mod tests {
     use vmm::vmm_config::snapshot::{
-        MemBackendConfig, MemBackendType, NetworkOverride, SnapshotLoadHugePageConfig,
+        DriveOverride, MemBackendConfig, MemBackendType, NetworkOverride,
+        SnapshotLoadHugePageConfig,
     };
 
     use super::*;
@@ -212,6 +214,7 @@ mod tests {
             track_dirty_pages: false,
             resume_vm: false,
             network_overrides: vec![],
+            drive_overrides: vec![],
             vsock_override: None,
             clock_realtime: false,
             huge_pages: SnapshotLoadHugePageConfig::Hugetlbfs2M,
@@ -245,6 +248,7 @@ mod tests {
             track_dirty_pages: true,
             resume_vm: false,
             network_overrides: vec![],
+            drive_overrides: vec![],
             vsock_override: None,
             clock_realtime: false,
             huge_pages: SnapshotLoadHugePageConfig::Snapshot,
@@ -279,6 +283,7 @@ mod tests {
             track_dirty_pages: false,
             resume_vm: true,
             network_overrides: vec![],
+            drive_overrides: vec![],
             vsock_override: None,
             clock_realtime: false,
             huge_pages: SnapshotLoadHugePageConfig::Snapshot,
@@ -307,6 +312,12 @@ mod tests {
                     "iface_id": "eth0",
                     "host_dev_name": "vmtap2"
                 }
+            ],
+            "drive_overrides": [
+                {
+                    "drive_id": "container",
+                    "path_on_host": "/dev/mapper/restored"
+                }
             ]
         }"#;
         let expected_config = LoadSnapshotParams {
@@ -320,6 +331,10 @@ mod tests {
             network_overrides: vec![NetworkOverride {
                 iface_id: String::from("eth0"),
                 host_dev_name: String::from("vmtap2"),
+            }],
+            drive_overrides: vec![DriveOverride {
+                drive_id: String::from("container"),
+                path_on_host: String::from("/dev/mapper/restored"),
             }],
             vsock_override: None,
             clock_realtime: false,
@@ -351,6 +366,7 @@ mod tests {
             track_dirty_pages: false,
             resume_vm: true,
             network_overrides: vec![],
+            drive_overrides: vec![],
             vsock_override: None,
             clock_realtime: false,
             huge_pages: SnapshotLoadHugePageConfig::Snapshot,

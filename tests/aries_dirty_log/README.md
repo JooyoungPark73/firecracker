@@ -64,3 +64,8 @@ untouched fifth page remains outside that cycle.
 `--no-capture-census` validates raw reads and scans with bounded per-request
 pagemap presence probes, no capture census record, and the complete read mask.
 It can be combined with the explicit marker TLB positive control above.
+
+`--metadata-only --no-capture-census` isolates raw reads/scans from the idle
+positive oracle: it calls no dirty, idle, census or coordinator endpoint, boots
+with dirty logging disabled, checks the null census reference and per-request
+pagemap source, and validates frozen payload and union read-mask exports.

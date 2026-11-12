@@ -10,6 +10,22 @@ ARIES repository under `runs/tracer-v118-port/`; consult their exact source and
 binary hashes before reusing a result. The port alone does not prove workload
 coverage or attribution-decoder correctness.
 
+Current bounded gates on amd205 (Ubuntu 6.8.0-147-generic, deployment-supplied
+Linux 5.10.239): 23 page-tracking tests, 36 HTTP parser/conversion tests,
+stock-seccomp native CPU/write-restore/block/net/vsock fixture, coordinator
+pending-capture/Resume hold fixture, 8GiB two-slot dirty fixture and a real
+firecracker-containerd container with three exec calls. A metadata-only HTTP
+fixture additionally runs with dirty logging disabled, calls no bit/census
+endpoint, captures no census, scans using bounded per-request pagemap probes,
+and retains the union raw-read/scan mask and frozen export. Exact binaries and
+individual test suite outcomes are recorded in downstream receipts.
+
+The unmodified repeated-idle fixture fails some positive CPU read controls on
+both preserved v1.13 and v1.18 under the same worker/kernel. Host page-idle does
+not flush secondary TLBs. Even the optional guest mprotect positive control can
+miss accesses, so its occasional success is not general read coverage. These
+failures are retained, not recast as idle workload pages or a passing oracle.
+
 # Historical v1.13 tracer validation record
 
 This is a source-only summary; compiled binaries, kernel images, initrds,

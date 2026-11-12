@@ -993,7 +993,7 @@ mod tests {
         m.transact(vm, d, r, q, true).unwrap()
     }
     #[test]
-    fn metadata_only_without_census_reads_selected_pages_and_never_resets_bits() {
+    fn metadata_only_without_census_reads_and_scans_without_resetting_bits() {
         let (vm, _events) = fixture(false);
         let mut vm = vm.lock().unwrap();
         let mut m = Manager::default();
@@ -1017,7 +1017,7 @@ mod tests {
             Resource::Metadata,
             json!({"operation":"begin","capture_id":"selected","epoch":1,"vm_generation":generation,
                    "mode":"attribution","consistency":"quiescence_only","max_bytes":4096,
-                   "max_scan_bytes":0,"capture_census":false}),
+                   "max_scan_bytes":4096,"capture_census":false}),
         );
         assert!(begin["census_record_id"].is_null());
         assert!(m.captures["selected"].census.is_none());
@@ -1031,6 +1031,20 @@ mod tests {
             json!({"operation":"read_pages","capture_id":"selected","vm_generation":generation,"gpas":[0x5000]}),
         );
         assert_eq!(read["pages"].as_array().unwrap().len(), 1);
+        let scan = call(
+            &mut m,
+            &mut vm,
+            &mut d,
+            Resource::Metadata,
+            json!({"operation":"scan","capture_id":"selected","vm_generation":generation,
+                "needle_b64":"bmVlZGxl","start_gpa":0x5000,"end_gpa":0x6000,
+                "cursor":0x5000,"max_scan_bytes":4096,"resident_only":true}),
+        );
+        assert_eq!(scan["scanned_bytes"], 4096);
+        assert_eq!(scan["scan_residency_source"], "per_request_pagemap");
+        assert!(m.captures["selected"].census.is_none());
+        assert!(m.records.records.is_empty());
+        assert!(!m.reset_performed);
         call(
             &mut m,
             &mut vm,

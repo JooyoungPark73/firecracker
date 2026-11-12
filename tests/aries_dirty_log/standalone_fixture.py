@@ -13,7 +13,7 @@ class Conn(http.client.HTTPConnection):
         self.sock = socket.socket(socket.AF_UNIX)
         self.sock.connect(str(self.path))
 
-def run(out, mem_mib, binary, kernel, initrd, kernel_source, tap, flush_marker_tlb=False):
+def run(out, mem_mib, binary, kernel, initrd, kernel_source, tap, flush_marker_tlb=False, capture_census=True):
     out.mkdir(parents=True)
     sock = out / 'api.sock'
     vs = out / 'vs.sock'
@@ -78,6 +78,7 @@ def run(out, mem_mib, binary, kernel, initrd, kernel_source, tap, flush_marker_t
     calls = []
     results = {'kernel_sha256': hashlib.sha256(kernel.read_bytes()).hexdigest(), 'kernel_source': kernel_source, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'host_uname': os.uname().release, 'mem_mib': mem_mib}
     results['fixture_marker_tlb_invalidation'] = flush_marker_tlb
+    results['metadata_capture_census'] = capture_census
     proc = None
     conn = None
     udp = None
@@ -153,10 +154,13 @@ def run(out, mem_mib, binary, kernel, initrd, kernel_source, tap, flush_marker_t
             assert len(known)==4 and all(r['state']=='observed' for r in known)
             assert len(control)==1 and control[0]['state']=='idle'
             call('PUT','/page-idle',{'operation':'ack','record_id':access['access_record_id'],'vm_generation':generation})
-        begin=call('PUT','/metadata-capture',{'operation':'begin','capture_id':'standalone','mode':'attribution','consistency':'quiescence_only','max_bytes':4096,'max_scan_bytes':4096})
+        begin=call('PUT','/metadata-capture',{'operation':'begin','capture_id':'standalone','mode':'attribution','consistency':'quiescence_only','max_bytes':4096,'max_scan_bytes':4096,'capture_census':capture_census})
+        assert bool(begin['census_record_id']) == capture_census
         page=call('PUT','/metadata-capture',{'operation':'read_pages','capture_id':'standalone','vm_generation':generation,'gpas':[pfns[0]*4096]})['pages'][0]
         scan=call('PUT','/metadata-capture',{'operation':'scan','capture_id':'standalone','vm_generation':generation,'needle_b64':base64.b64encode(b'\0'*16).decode(),'start_gpa':pfns[0]*4096,'end_gpa':(pfns[0]+1)*4096,'cursor':pfns[0]*4096,'max_scan_bytes':4096,'resident_only':True})
         assert scan['matches'] and scan['scanned_bytes']==4096
+        assert scan['scan_residency_source'] == ('begin_census' if capture_census else 'per_request_pagemap')
+        results['scan_residency_source'] = scan['scan_residency_source']
         seal=call('PUT','/metadata-capture',{'operation':'seal','capture_id':'standalone','vm_generation':generation})
         assert seal['consistency']=='quiescence_only'
         call('PATCH','/vm',{'state':'Resumed'})
@@ -195,5 +199,6 @@ if __name__ == '__main__':
     p.add_argument('--tap', default='ariesdirty')
     p.add_argument('--mem-mib', type=int, choices=[256, 8192], default=256)
     p.add_argument('--flush-marker-tlb', action='store_true', help='fixture-only mprotect positive control; does not prove arbitrary read coverage')
+    p.add_argument('--no-capture-census', action='store_true', help='scan and read metadata with per-request presence probes, without a capture census')
     a = p.parse_args()
-    run(a.out.resolve(), a.mem_mib, a.binary.resolve(), a.kernel.resolve(), a.initrd.resolve(), a.kernel_source, a.tap, a.flush_marker_tlb)
+    run(a.out.resolve(), a.mem_mib, a.binary.resolve(), a.kernel.resolve(), a.initrd.resolve(), a.kernel_source, a.tap, a.flush_marker_tlb, not a.no_capture_census)

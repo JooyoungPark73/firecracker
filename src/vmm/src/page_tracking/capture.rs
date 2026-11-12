@@ -396,11 +396,42 @@ impl Capture {
                 return Err("scan cursor/query mismatch; restart at range start".into());
             }
         };
-        let gpas = self
-            .census
-            .as_ref()
-            .ok_or("capture census released")?
-            .resident_gpas_from(cursor, end, (max_scan / 4096) as usize)?;
+        let (gpas, next, complete) = if let Some(census) = &self.census {
+            let gpas = census.resident_gpas_from(cursor, end, (max_scan / 4096) as usize)?;
+            let next = gpas.last().map_or(end, |g| g + 4096);
+            let complete = census.resident_gpas_from(next, end, 1)?.is_empty();
+            (gpas, next, complete)
+        } else {
+            // A capture without a census must not construct a RAM-wide inventory
+            // merely to scan. Bound both the presence probes and payload reads by
+            // this request's page budget, advancing across absent pages and holes.
+            let mut gpas = Vec::new();
+            let mut next = cursor;
+            let mut examined = 0;
+            for region in &self.regions {
+                let mut gpa = cursor.max(region.guest_base);
+                let limit = end.min(region.guest_base + region.bytes);
+                while gpa < limit && examined < max_scan / 4096 {
+                    if host.page_pfn(mem, gpa)?.is_some() {
+                        gpas.push(gpa);
+                    }
+                    examined += 1;
+                    gpa += 4096;
+                    next = gpa;
+                }
+                if examined == max_scan / 4096 {
+                    break;
+                }
+            }
+            let complete = !self
+                .regions
+                .iter()
+                .any(|r| r.guest_base.max(next.max(cursor)) < end.min(r.guest_base + r.bytes));
+            if complete {
+                next = end;
+            }
+            (gpas, next, complete)
+        };
         let bytes = (gpas.len() as u64) * 4096;
         if self
             .scan_bytes
@@ -443,13 +474,6 @@ impl Capture {
             tail.bytes = joined[joined.len() - keep..].to_vec();
             tail.last_end = Some(gpa + 4096);
         }
-        let next = gpas.last().map_or(end, |g| g + 4096);
-        let complete = self
-            .census
-            .as_ref()
-            .ok_or("capture census released")?
-            .resident_gpas_from(next, end, 1)?
-            .is_empty();
         tail.next = next;
         self.tail = Some(tail);
         let sha = context_hash(ctx);
@@ -465,7 +489,7 @@ impl Capture {
             needle_sha256: hash(needle),
         });
         Ok(
-            json!({"matches":matches,"next_cursor":next,"complete":complete,"scanned_pages":gpas.len(),"scanned_bytes":bytes,"cumulative_scan_bytes":self.scan_bytes,"scan_sha256":sha}),
+            json!({"matches":matches,"next_cursor":next,"complete":complete,"scanned_pages":gpas.len(),"scanned_bytes":bytes,"cumulative_scan_bytes":self.scan_bytes,"scan_sha256":sha,"scan_residency_source":if self.census.is_some(){"begin_census"}else{"per_request_pagemap"}}),
         )
     }
     pub fn freeze(
@@ -522,6 +546,86 @@ mod tests {
             1024 * 1024,
         );
         (host, c)
+    }
+    #[test]
+    fn scan_without_census_bounds_presence_probes_and_crosses_holes() {
+        let mem = crate::test_utils::multi_region_mem(&[
+            (GuestAddress(0), 2 * PAGE),
+            (GuestAddress(4 * PAGE as u64), 2 * PAGE),
+        ]);
+        mem.write_slice(b"needle", GuestAddress(0)).unwrap();
+        mem.write_slice(b"needle", GuestAddress(5 * PAGE as u64))
+            .unwrap();
+        let mut host = HostPages::new(false).unwrap();
+        let regions = HostPages::layout(&mem)
+            .unwrap()
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect();
+        let mut c = Capture::new(
+            "no-census".into(),
+            None,
+            "bootstrap".into(),
+            "generation".into(),
+            Consistency::QuiescenceOnly,
+            None,
+            None,
+            regions,
+            PAGE as u64,
+            4 * PAGE as u64,
+        );
+        let mut cursor = 0;
+        let mut matches = Vec::new();
+        let mut replies = 0;
+        loop {
+            let r = c
+                .scan(
+                    &mut host,
+                    &mem,
+                    b"needle",
+                    0,
+                    6 * PAGE as u64,
+                    cursor,
+                    PAGE as u64,
+                    true,
+                )
+                .unwrap();
+            assert_eq!(r["scan_residency_source"], "per_request_pagemap");
+            assert!(r["scanned_pages"].as_u64().unwrap() <= 1);
+            let next = r["next_cursor"].as_u64().unwrap();
+            assert!(next > cursor);
+            matches.extend(r["matches"].as_array().unwrap().iter().cloned());
+            cursor = next;
+            replies += 1;
+            if r["complete"] == true {
+                break;
+            }
+        }
+        assert_eq!(replies, 4);
+        assert_eq!(
+            matches,
+            vec![
+                json!({"gpa":0,"offset":0}),
+                json!({"gpa":5 * PAGE,"offset":0})
+            ]
+        );
+        assert!(c.census.is_none());
+        assert_eq!(c.scans.len(), 4);
+        assert!(c.masks[&0].scan_read && c.masks[&(5 * PAGE as u64)].scan_read);
+        let r = c
+            .scan(
+                &mut host,
+                &mem,
+                b"needle",
+                0,
+                6 * PAGE as u64,
+                cursor,
+                PAGE as u64,
+                true,
+            )
+            .unwrap();
+        assert_eq!(r["complete"], true);
+        assert_eq!(r["scanned_bytes"], 0);
     }
     #[test]
     fn dense_scan_and_empty_log_capacity_are_reserved() {

@@ -131,7 +131,7 @@ queue state. Immutable census export remains allowed.
 
 Begin supplies `capture_id`, mode `bootstrap` or `attribution`,
 consistency `quiescence_only` or `dirty_validated`, and optional
-`max_bytes`/`max_scan_bytes` and `capture_census` (default true). Set `capture_census: false` for selected raw-page reads without a census; scans require a census. Dirty-validated begin additionally supplies
+`max_bytes`/`max_scan_bytes` and `capture_census` (default true). Set `capture_census: false` for selected raw-page reads and bounded scans without a RAM-wide census. Dirty-validated begin additionally supplies
 the active `epoch` and `vm_generation`. All subsequent capture operations
 require both capture ID and generation. By default begin captures a census before any
 payload read and returns its immutable record reference and GPA regions. With
@@ -143,8 +143,12 @@ SHA256, and pre/post presence/PFN evidence. Every lowest-level guest read,
 including bootstrap scans and translation-table reads, enters the read mask.
 
 `scan` accepts a 1–256-byte base64 needle, page-aligned start/end/cursor and
-a per-request scan budget of 4 KiB–1 MiB. Only pages resident in the begin census
-are searched. Matches cross contiguous page and request boundaries using a
+a per-request scan budget of 4 KiB–1 MiB. With a captured census, only pages resident in that begin census
+are searched. Without one, per-request pagemap probes select resident pages
+within the current bounded address window. Both candidate presence probes and
+payload reads are bounded by the request page budget; absent pages and RAM
+holes advance the cursor without payload reads. The response identifies
+`scan_residency_source` as `begin_census` or `per_request_pagemap`. Matches cross contiguous page and request boundaries using a
 bounded tail; gaps/nonresident pages reset the tail. Matches identify their
 starting page and byte offset. Per-request scanned bytes/hash and cumulative
 scanned bytes are distinct. Scanned bytes are not all retained: scan logs retain
@@ -232,7 +236,8 @@ Selecting only dirty bits never constructs host-page inventory or metadata
 capture state. Idle bits need a host PFN/presence inventory to classify reliable
 access evidence; its internal census is retained even if no public census is
 selected, but no independent census record is published. Census-only does not
-open page-idle, kpageflags or kpagecount. Metadata capture with no census opens
+open page-idle. Nonzero resident PFNs cause census to lazily open/read
+kpageflags and kpagecount as part of its own inventory. Metadata capture with no census opens
 neither host inventory nor idle facilities. These are residual costs to measure,
 not evidence of zero overhead. KVM dirty logging and guest-memory bitmap
 allocation are boot-time choices; disabling per-epoch collection cannot undo them.

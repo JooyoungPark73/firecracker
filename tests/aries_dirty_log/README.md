@@ -60,3 +60,7 @@ assertion is retained as failed evidence, not repaired into a zero-access claim.
 before the four marker accesses. It provides a controlled positive oracle for
 repeatable page-idle testing; it does not establish general read coverage. The
 untouched fifth page remains outside that cycle.
+
+`--no-capture-census` validates raw reads and scans with bounded per-request
+pagemap presence probes, no capture census record, and the complete read mask.
+It can be combined with the explicit marker TLB positive control above.

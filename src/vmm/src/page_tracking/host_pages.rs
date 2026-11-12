@@ -23,6 +23,9 @@ const LRU: u64 = 1 << 5;
 const COMPOUND: u64 = (1 << 15) | (1 << 16) | (1 << 17) | (1 << 22);
 const SHARED: u64 = (1 << 21) | (1 << 24);
 const PROC_WORDS: usize = 8192;
+// Read-only flags/count metadata can span small PFN holes. Do not apply this
+// to page-idle I/O, whose reads/writes have page-tracking side effects.
+const PROC_MAX_WORD_GAP: u64 = 4;
 const IDLE_WORDS: usize = 512; // kernfs binary I/O is capped at one host page.
 const MAX_CHUNK_ROWS: usize = 256;
 const DEFAULT_COMPONENT_LIMIT: usize = 512 * 1024 * 1024;
@@ -74,14 +77,22 @@ fn read_words<T: Read + Seek>(
     while first < indices.len() {
         let mut end = first + 1;
         while end < indices.len()
-            && end - first < limit
-            && indices[end - 1].checked_add(1) == Some(indices[end])
+            && indices[end] - indices[first] < limit as u64
+            && indices[end] - indices[end - 1] <= PROC_MAX_WORD_GAP
         {
             end += 1;
         }
-        io_read(io, indices[first], &mut bytes[..(end - first) * 8])?;
-        for (j, chunk) in bytes[..(end - first) * 8].chunks_exact(8).enumerate() {
-            out[first + j] = u64::from_ne_bytes(chunk.try_into().unwrap());
+        let span = (indices[end - 1] - indices[first] + 1) as usize;
+        io_read(io, indices[first], &mut bytes[..span * 8])?;
+        if span == end - first {
+            for (j, chunk) in bytes[..span * 8].chunks_exact(8).enumerate() {
+                out[first + j] = u64::from_ne_bytes(chunk.try_into().unwrap());
+            }
+        } else {
+            for j in first..end {
+                let at = (indices[j] - indices[first]) as usize * 8;
+                out[j] = u64::from_ne_bytes(bytes[at..at + 8].try_into().unwrap());
+            }
         }
         first = end;
     }
@@ -1152,7 +1163,7 @@ mod tests {
         assert!(read_words(&mut Cursor::new(vec![0u8; 7]), &[0], PROC_WORDS).is_err());
     }
     #[test]
-    fn sparse_words_do_not_read_or_write_holes() {
+    fn idle_words_skip_holes_while_read_only_metadata_coalesces_small_gaps() {
         let mut io = CountIo::default();
         write_idle(&mut io, &[(0, 1), (2, 4)]).unwrap();
         assert_eq!(io.writes, vec![8, 8]);
@@ -1160,9 +1171,89 @@ mod tests {
             read_words(&mut io, &[0, 2], PROC_WORDS).unwrap(),
             vec![1, 4]
         );
-        assert_eq!(io.reads, vec![8, 8]);
+        assert_eq!(io.reads, vec![24]);
+        let mut words = [(0, 0), (2, 0)];
+        read_idle_in_place(&mut io, &mut words).unwrap();
+        assert_eq!(words, [(0, 1), (2, 4)]);
+        assert_eq!(io.reads, vec![24, 8, 8]);
         assert!(read_words(&mut io, &[2, 1], PROC_WORDS).is_err());
         assert!(read_words(&mut io, &[1, 1], PROC_WORDS).is_err());
+    }
+    #[test]
+    fn coalesced_metadata_preserves_values_limits_large_holes_and_eof_errors() {
+        let values: Vec<u64> = (0..20000).map(|i| i * 257 + 11).collect();
+        let bytes: Vec<u8> = values.iter().flat_map(|word| word.to_ne_bytes()).collect();
+        let mut io = CountIo { inner: Cursor::new(bytes), ..Default::default() };
+        let selected: Vec<u64> = (0..8192).map(|i| i * 2).collect();
+        assert_eq!(read_words(&mut io, &selected, PROC_WORDS).unwrap(),
+            selected.iter().map(|&i| values[i as usize]).collect::<Vec<_>>());
+        assert_eq!(io.reads, vec![65528, 65528]);
+        io.reads.clear();
+        assert_eq!(read_words(&mut io, &[0, 4, 9], PROC_WORDS).unwrap(),
+            vec![values[0], values[4], values[9]]);
+        assert_eq!(io.reads, vec![40, 8]);
+        io.reads.clear();
+        read_words(&mut io, &[0, 8193], PROC_WORDS).unwrap();
+        assert_eq!(io.reads, vec![8, 8]);
+        assert!(read_words(&mut Cursor::new(vec![0u8; 24 - 1]), &[0, 2], PROC_WORDS).is_err());
+    }
+    #[test]
+    #[ignore = "local regular-file metadata I/O benchmark; no KVM or procfs writes"]
+    fn benchmark_sparse_metadata_coalescing() {
+        use std::time::Instant;
+        use vmm_sys_util::tempfile::TempFile;
+        struct CountFile { file: File, reads: usize, seeks: usize, bytes: usize }
+        impl Seek for CountFile {
+            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+                self.seeks += 1;
+                self.file.seek(pos)
+            }
+        }
+        impl Read for CountFile {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                let count = self.file.read(out)?;
+                self.bytes += count;
+                Ok(count)
+            }
+        }
+        fn legacy(io: &mut CountFile, indices: &[u64]) -> Vec<u64> {
+            let mut result = vec![0; indices.len()];
+            let mut first = 0;
+            let mut bytes = [0u8; PROC_WORDS * 8];
+            while first < indices.len() {
+                let mut end = first + 1;
+                while end < indices.len() && end-first < PROC_WORDS && indices[end-1]+1 == indices[end] { end += 1; }
+                io_read(io, indices[first], &mut bytes[..(end-first)*8]).unwrap();
+                for (j, chunk) in bytes[..(end-first)*8].chunks_exact(8).enumerate() {
+                    result[first+j] = u64::from_ne_bytes(chunk.try_into().unwrap());
+                }
+                first = end;
+            }
+            result
+        }
+        for (stride, pages) in [(1u64,65536usize),(2,65536),(4,65536),(5,8192)] {
+            let temp = TempFile::new().unwrap();
+            let indices: Vec<_> = (0..pages).map(|i| 100000+(i as u64)*stride).collect();
+            let values: Vec<u8> = (0..=*indices.last().unwrap()).flat_map(|i| (i^0x5a5a5a5a5a5a5a5a).to_ne_bytes()).collect();
+            let mut file = temp.as_file().try_clone().unwrap();
+            file.write_all(&values).unwrap();
+            let mut old = CountFile { file: file.try_clone().unwrap(), reads:0, seeks:0, bytes:0 };
+            let start = Instant::now();
+            let expected = legacy(&mut old, &indices);
+            let baseline_ns = start.elapsed().as_nanos();
+            let mut new = CountFile { file, reads:0, seeks:0, bytes:0 };
+            let start = Instant::now();
+            let actual = read_words(&mut new, &indices, PROC_WORDS).unwrap();
+            let indexed_ns = start.elapsed().as_nanos();
+            assert_eq!(actual, expected);
+            assert_eq!(actual, indices.iter().map(|i| i^0x5a5a5a5a5a5a5a5a).collect::<Vec<_>>());
+            println!("{}", json!({"benchmark":"metadata_gap_coalescing","selected_pfns":pages,"stride":stride,
+                "max_read_bytes":PROC_WORDS*8,"max_pfn_step":PROC_MAX_WORD_GAP,
+                "baseline":{"wall_ns":baseline_ns,"read_calls":old.reads,"lseek_calls":old.seeks,"bytes":old.bytes},
+                "coalesced":{"wall_ns":indexed_ns,"read_calls":new.reads,"lseek_calls":new.seeks,"bytes":new.bytes},
+                "all_selected_words_equal":true,"scope":"compiled Rust regular-file fixture; not procfs latency"}));
+        }
     }
     #[test]
     fn ordinal_chunks_skip_presence_words_without_allocating_rows() {

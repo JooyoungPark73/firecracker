@@ -241,3 +241,15 @@ kpageflags and kpagecount as part of its own inventory. Metadata capture with no
 neither host inventory nor idle facilities. These are residual costs to measure,
 not evidence of zero overhead. KVM dirty logging and guest-memory bitmap
 allocation are boot-time choices; disabling per-epoch collection cannot undo them.
+
+## Preserved bounded overhead optimizations
+
+The v1.13 optimization commit is carried into this port. Immutable dirty
+exports use a population-rank prefix index every 256 bitmap bytes, preserving
+CPU/VMM provenance while skipping earlier export chunks. Read-only kpageflags
+and kpagecount requests coalesce selected PFNs at most four words apart within
+a 64KiB span. Unselected words are discarded; large gaps and short reads retain
+their original error behavior. Page-idle reads/writes remain sparse and bounded
+to one host page, with no coalescing across holes. The regular-file and export
+microbenchmarks are diagnostic; native workload overhead must be measured on
+matched VM trials.

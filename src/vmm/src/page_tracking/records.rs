@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub const MAX_RECORDS: usize = 8;
 pub const MAX_RETAINED_BYTES: usize = 1024 * 1024 * 1024;
+const DIRTY_RANK_BYTES: usize = 256;
 
 #[derive(Debug)]
 pub struct DirtyRegion {
@@ -16,6 +17,7 @@ pub struct DirtyRegion {
     pub page_count: u64,
     cpu: Vec<u8>,
     vmm: Vec<u8>,
+    rank: Vec<u64>,
 }
 #[derive(Debug, Default)]
 pub struct DirtyData {
@@ -47,11 +49,20 @@ impl DirtyData {
             if cpu.len() != vmm.len() || cpu.len() as u64 != pages.div_ceil(64) * 8 {
                 return Err("dirty bitmap length mismatch".into());
             }
-            let positive: u64 = cpu
-                .iter()
-                .zip(&vmm)
-                .map(|(a, b)| (a | b).count_ones() as u64)
-                .sum();
+            let mut rank = Vec::new();
+            rank.try_reserve_exact(cpu.len().div_ceil(DIRTY_RANK_BYTES) + 1)
+                .map_err(|e| format!("dirty rank allocation: {e}"))?;
+            rank.push(0);
+            let mut positive = 0;
+            for (byte, (&a, &b)) in cpu.iter().zip(&vmm).enumerate() {
+                positive += (a | b).count_ones() as u64;
+                if (byte + 1) % DIRTY_RANK_BYTES == 0 {
+                    rank.push(positive);
+                }
+            }
+            if cpu.len() % DIRTY_RANK_BYTES != 0 {
+                rank.push(positive);
+            }
             out.positive_count = out
                 .positive_count
                 .checked_add(positive)
@@ -62,6 +73,7 @@ impl DirtyData {
                 page_count: pages,
                 cpu,
                 vmm,
+                rank,
             });
         }
         out.metadata = json!({"regions":region_meta,"begin_monotonic_us":value["begin_monotonic_us"],"end_monotonic_us":value["end_monotonic_us"],"vcpu_paused":value["vcpu_paused"],"device_quiescence":value["device_quiescence"],"vmm_semantics":value["vmm_semantics"],"boot_baseline_discarded":value["boot_baseline_discarded"]});
@@ -70,7 +82,12 @@ impl DirtyData {
     pub fn estimated_bytes(&self) -> usize {
         self.regions
             .iter()
-            .map(|r| r.cpu.capacity() + r.vmm.capacity() + 64)
+            .map(|r| {
+                r.cpu.capacity()
+                    + r.vmm.capacity()
+                    + r.rank.capacity() * std::mem::size_of::<u64>()
+                    + std::mem::size_of::<DirtyRegion>()
+            })
             .sum()
     }
     pub fn contains(&self, gpa: u64) -> bool {
@@ -87,7 +104,18 @@ impl DirtyData {
         let mut skip = offset;
         let mut rows = Vec::new();
         for r in &self.regions {
-            for (byte, (&cpu, &vmm)) in r.cpu.iter().zip(&r.vmm).enumerate() {
+            let total = *r.rank.last().unwrap_or(&0);
+            if skip >= total {
+                skip -= total;
+                continue;
+            }
+            // Frozen bitmaps permit ordinal lookup without another prefix scan.
+            // Repeated ranks skip empty blocks while retaining their GPA positions.
+            let block = r.rank.partition_point(|&count| count <= skip) - 1;
+            skip -= r.rank[block];
+            let first = block * DIRTY_RANK_BYTES;
+            for (relative, (&cpu, &vmm)) in r.cpu[first..].iter().zip(&r.vmm[first..]).enumerate() {
+                let byte = first + relative;
                 let mut bits = cpu | vmm;
                 let count = bits.count_ones() as u64;
                 if skip >= count {
@@ -349,5 +377,148 @@ impl Records {
             ));
         }
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region(base: u64, pages: usize, cpu: &[usize], vmm: &[usize]) -> Value {
+        let mut cpu_bits = vec![0u8; pages.div_ceil(64) * 8];
+        let mut vmm_bits = cpu_bits.clone();
+        for &page in cpu {
+            cpu_bits[page / 8] |= 1 << (page % 8);
+        }
+        for &page in vmm {
+            vmm_bits[page / 8] |= 1 << (page % 8);
+        }
+        json!({"slot":0,"guest_base":base,"page_count":pages,"bytes":pages*4096,
+            "kvm_dirty_b64":STANDARD.encode(cpu_bits),"vmm_dirty_b64":STANDARD.encode(vmm_bits)})
+    }
+
+    #[test]
+    fn dirty_ordinals_preserve_dense_cpu_and_vmm_provenance() {
+        let pages = 8192;
+        let cpu: Vec<_> = (0..pages).collect();
+        let vmm: Vec<_> = (0..pages).step_by(2).collect();
+        let data =
+            DirtyData::from_reply(&json!({"regions":[region(4096,pages,&cpu,&vmm)]})).unwrap();
+        assert_eq!(data.positive_count, pages as u64);
+        for offset in [0, 1, 2047, 2048, 4095, 4096, 8191, 8192] {
+            let rows = data.rows(offset as u64, 4096);
+            assert_eq!(rows.len(), (pages - offset).min(4096));
+            for (index, row) in rows.iter().enumerate() {
+                let page = offset + index;
+                assert_eq!(
+                    *row,
+                    json!({"gpa":4096+(page as u64)*4096,
+                    "kvm_dirty":true,"vmm_dirty":page%2==0})
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dirty_ordinals_skip_empty_blocks_regions_and_preserve_partial_tail() {
+        let data = DirtyData::from_reply(&json!({"regions":[
+            region(0,4096,&[],&[]),
+            region(0x10000000,8193,&[0,2048,8192],&[2048,4097]),
+            region(0x20000000,65,&[64],&[])]}))
+        .unwrap();
+        let expected = vec![
+            json!({"gpa":0x10000000u64,"kvm_dirty":true,"vmm_dirty":false}),
+            json!({"gpa":0x10000000u64+2048*4096,"kvm_dirty":true,"vmm_dirty":true}),
+            json!({"gpa":0x10000000u64+4097*4096,"kvm_dirty":false,"vmm_dirty":true}),
+            json!({"gpa":0x10000000u64+8192*4096,"kvm_dirty":true,"vmm_dirty":false}),
+            json!({"gpa":0x20000000u64+64*4096,"kvm_dirty":true,"vmm_dirty":false}),
+        ];
+        assert_eq!(data.positive_count, expected.len() as u64);
+        for offset in 0..=expected.len() {
+            for limit in [1, 2, 4096] {
+                assert_eq!(
+                    data.rows(offset as u64, limit),
+                    expected[offset..]
+                        .iter()
+                        .take(limit)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        assert!(data.rows(100, 4096).is_empty());
+    }
+
+    // Pre-index implementation retained solely as an independent benchmark oracle.
+    fn legacy_rows(data: &DirtyData, offset: u64, limit: usize) -> Vec<Value> {
+        let mut skip = offset;
+        let mut rows = Vec::new();
+        for r in &data.regions {
+            for (byte, (&cpu, &vmm)) in r.cpu.iter().zip(&r.vmm).enumerate() {
+                let mut bits = cpu | vmm;
+                let count = bits.count_ones() as u64;
+                if skip >= count {
+                    skip -= count;
+                    continue;
+                }
+                while bits != 0 {
+                    let bit = bits.trailing_zeros();
+                    bits &= bits - 1;
+                    let page = byte as u64 * 8 + u64::from(bit);
+                    if page >= r.page_count {
+                        break;
+                    }
+                    if skip > 0 {
+                        skip -= 1;
+                        continue;
+                    }
+                    rows.push(json!({"gpa":r.guest_base+page*4096,
+                        "kvm_dirty":cpu&(1<<bit)!=0,"vmm_dirty":vmm&(1<<bit)!=0}));
+                    if rows.len() == limit {
+                        return rows;
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    #[test]
+    #[ignore = "local deterministic export microbenchmark, no KVM"]
+    fn benchmark_dirty_export_prefix_index() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let pages = 1 << 19;
+        let cpu: Vec<_> = (0..pages).collect();
+        let vmm: Vec<_> = (0..pages).step_by(2).collect();
+        let data = DirtyData::from_reply(&json!({"regions":[region(0,pages,&cpu,&vmm)]})).unwrap();
+        for offset in (0..pages).step_by(4096) {
+            assert_eq!(
+                data.rows(offset as u64, 4096),
+                legacy_rows(&data, offset as u64, 4096)
+            );
+        }
+        let mut baseline = Vec::new();
+        let mut indexed = Vec::new();
+        for _ in 0..5 {
+            let start = Instant::now();
+            for offset in (0..pages).step_by(4096) {
+                black_box(legacy_rows(black_box(&data), offset as u64, 4096));
+            }
+            baseline.push(start.elapsed().as_nanos());
+            let start = Instant::now();
+            for offset in (0..pages).step_by(4096) {
+                black_box(data.rows(offset as u64, 4096));
+            }
+            indexed.push(start.elapsed().as_nanos());
+        }
+        println!(
+            "{}",
+            json!({"benchmark":"dirty_export_prefix_index","guest_ram_bytes":pages as u64*4096,
+            "positive_pages":pages,"limit":4096,"exports":pages/4096,
+            "index_bytes":data.regions[0].rank.capacity()*8,
+            "baseline_wall_samples_ns":baseline,"indexed_wall_samples_ns":indexed,
+            "all_export_rows_semantically_equal":true,"scope":"compiled local Rust/JSON fixture; no KVM or guest"})
+        );
     }
 }

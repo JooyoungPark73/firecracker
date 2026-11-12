@@ -11,7 +11,7 @@ binary hashes before reusing a result. The port alone does not prove workload
 coverage or attribution-decoder correctness.
 
 Current bounded gates on amd205 (Ubuntu 6.8.0-147-generic, deployment-supplied
-Linux 5.10.239): 23 page-tracking tests, 36 HTTP parser/conversion tests,
+Linux 5.10.239): 26 page-tracking tests (plus two separately ignored microbenchmarks), 36 HTTP parser/conversion tests,
 stock-seccomp native CPU/write-restore/block/net/vsock fixture, coordinator
 pending-capture/Resume hold fixture, 8GiB two-slot dirty fixture and a real
 firecracker-containerd container with three exec calls. A metadata-only HTTP

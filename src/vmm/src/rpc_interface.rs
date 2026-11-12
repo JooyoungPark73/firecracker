@@ -65,6 +65,10 @@ pub enum VmmAction {
     /// Create a snapshot using as input the `CreateSnapshotParams`. This action can only be called
     /// after the microVM has booted and only when the microVM is in `Paused` state.
     CreateSnapshot(CreateSnapshotParams),
+    /// ARIES continuous dirty epoch request.
+    DirtyLog(crate::dirty_log::DirtyLogRequest),
+    /// Independently selected tracer resource request.
+    PageMetrics(crate::page_tracking::Resource, serde_json::Value),
     /// Get the balloon device configuration.
     GetBalloonConfig,
     /// Get the ballon device latest statistics.
@@ -162,6 +166,8 @@ pub enum VmmAction {
 /// Wrapper for all errors associated with VMM actions.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum VmmActionError {
+    /// Page metric error: {0}
+    PageMetrics(serde_json::Value),
     /// Balloon config error: {0}
     BalloonConfig(#[from] BalloonConfigError),
     /// Balloon update error: {0}
@@ -245,6 +251,10 @@ pub enum VmmData {
     MachineConfiguration(MachineConfig),
     /// Mmds contents.
     MmdsValue(serde_json::Value),
+    /// ARIES dirty epoch result with separate CPU and device maps.
+    DirtyLog(serde_json::Value),
+    /// Bounded tracer resource result.
+    PageMetrics(serde_json::Value),
     /// The microVM instance information.
     InstanceInformation(InstanceInfo),
     /// The microVM version.
@@ -519,7 +529,9 @@ impl<'a> PrebootApiController<'a> {
             SetEntropyDevice(config) => self.set_entropy_device(config),
             SetMemoryHotplugDevice(config) => self.set_memory_hotplug_device(config),
             // Operations not allowed pre-boot.
-            CreateSnapshot(_)
+            DirtyLog(_)
+            | PageMetrics(_, _)
+            | CreateSnapshot(_)
             | FlushMetrics
             | Pause
             | Resume
@@ -730,10 +742,24 @@ impl<'a> PrebootApiController<'a> {
 /// Enables RPC interaction with a running Firecracker VMM.
 #[derive(Debug)]
 pub struct RuntimeApiController {
+    dirty_log: crate::dirty_log::DirtyLogState,
+    page_metrics: crate::page_tracking::Manager,
+    http_pause_held: bool,
     vmm: Arc<Mutex<Vmm>>,
 }
 
 impl RuntimeApiController {
+    fn invalidate_measurement_lifecycle(&mut self, reason: String) {
+        self.http_pause_held = false;
+        self.page_metrics.invalidate_lifecycle(reason.clone());
+        self.dirty_log.invalidate_lifecycle(reason);
+    }
+
+    /// Set only by the HTTP adapter after a successful Pause or Resume action.
+    pub fn set_http_pause_held(&mut self, held: bool) {
+        self.http_pause_held = held;
+    }
+
     /// Handles the incoming runtime `VmmAction` request and provides a response for it.
     pub fn handle_request(
         &mut self,
@@ -741,9 +767,73 @@ impl RuntimeApiController {
         event_manager: &mut EventManager,
     ) -> Result<VmmData, VmmActionError> {
         use self::VmmAction::*;
+        if self.page_metrics.blocks_external_mutation()
+            && !matches!(
+                &request,
+                PageMetrics(_, _)
+                    | Resume
+                    | Pause
+                    | FlushMetrics
+                    | GetVmMachineConfig
+                    | GetFullVmConfig
+                    | GetMMDS
+                    | GetBalloonConfig
+                    | GetBalloonStats
+                    | GetVmInstanceInfo
+                    | GetVmmVersion
+            )
+        {
+            return Err(VmmActionError::NotSupported(
+                "operation conflicts with open or pending metadata capture".into(),
+            ));
+        }
+        if matches!(&request, Resume) && self.page_metrics.blocks_resume() {
+            return Err(VmmActionError::NotSupported("seal/abort capture and finalize or discard pending consistency before Resume; poisoned measurement cannot restart".into()));
+        }
         match request {
             // Supported operations allowed post-boot.
-            CreateSnapshot(snapshot_create_cfg) => self.create_snapshot(&snapshot_create_cfg),
+            PageMetrics(resource, request) => self
+                .page_metrics
+                .transact(
+                    &mut self.vmm.lock().expect("Poisoned lock"),
+                    &mut self.dirty_log,
+                    resource,
+                    request,
+                    self.http_pause_held,
+                )
+                .map(VmmData::PageMetrics)
+                .map_err(|error| VmmActionError::PageMetrics(error.0)),
+            DirtyLog(req) => {
+                if let Some(reason) = self.dirty_log.lifecycle_failure() {
+                    return Err(VmmActionError::NotSupported(reason.into()));
+                }
+                self.page_metrics
+                    .guard_independent_dirty()
+                    .map_err(VmmActionError::NotSupported)?;
+                if !self.http_pause_held {
+                    return self
+                        .dirty_log
+                        .cached_reply(&req)
+                        .map(VmmData::DirtyLog)
+                        .ok_or_else(|| {
+                            VmmActionError::NotSupported(
+                                "fresh dirty collection requires successful HTTP Pause hold".into(),
+                            )
+                        });
+                }
+                self.dirty_log
+                    .transact(&mut self.vmm.lock().expect("Poisoned lock"), req)
+                    .map(VmmData::DirtyLog)
+                    .map_err(VmmActionError::NotSupported)
+            }
+            CreateSnapshot(snapshot_create_cfg) => {
+                if self.dirty_log.started() || self.page_metrics.snapshot_conflicts() {
+                    return Err(VmmActionError::NotSupported(
+                        "snapshot resets conflict with measurement dirty epochs".into(),
+                    ));
+                }
+                self.create_snapshot(&snapshot_create_cfg)
+            }
             FlushMetrics => self.flush_metrics(),
             GetBalloonConfig => self
                 .vmm
@@ -915,14 +1005,23 @@ impl RuntimeApiController {
 
     /// Creates a new `RuntimeApiController`.
     pub fn new(vmm: Arc<Mutex<Vmm>>) -> Self {
-        Self { vmm }
+        Self {
+            vmm,
+            dirty_log: Default::default(),
+            page_metrics: Default::default(),
+            http_pause_held: false,
+        }
     }
 
     /// Pauses the microVM by pausing the vCPUs.
     pub fn pause(&mut self) -> Result<VmmData, VmmActionError> {
         let pause_start_us = get_time_us(ClockType::Monotonic);
 
-        self.vmm.lock().expect("Poisoned lock").pause_vm()?;
+        let transition = self.vmm.lock().expect("Poisoned lock").pause_vm();
+        if let Err(error) = transition {
+            self.invalidate_measurement_lifecycle(format!("Pause failed: {error}"));
+            return Err(error.into());
+        }
 
         let elapsed_time_us =
             update_metric_with_elapsed_time(&METRICS.latencies_us.vmm_pause_vm, pause_start_us);
@@ -935,7 +1034,11 @@ impl RuntimeApiController {
     pub fn resume(&mut self) -> Result<VmmData, VmmActionError> {
         let resume_start_us = get_time_us(ClockType::Monotonic);
 
-        self.vmm.lock().expect("Poisoned lock").resume_vm()?;
+        let transition = self.vmm.lock().expect("Poisoned lock").resume_vm();
+        if let Err(error) = transition {
+            self.invalidate_measurement_lifecycle(format!("Resume failed: {error}"));
+            return Err(error.into());
+        }
 
         let elapsed_time_us =
             update_metric_with_elapsed_time(&METRICS.latencies_us.vmm_resume_vm, resume_start_us);
@@ -1320,6 +1423,228 @@ mod tests {
                 requested_size_mib: 0,
             },
         )));
+    }
+
+    #[test]
+    fn test_lifecycle_ack_failure_invalidates_measurement_not_frozen_exports() {
+        use crate::dirty_log::DirtyLogRequest;
+        use crate::page_tracking::Resource;
+        use crate::vstate::vcpu::{VcpuEvent, VcpuResponse};
+        use serde_json::json;
+        let (vmm, mut events) = crate::test_utils::create_vmm(None, true, false, false, false);
+        crate::dirty_log::test_mmio(&mut vmm.lock().unwrap().device_manager)
+            .virtio_devices
+            .clear();
+        let mut runtime = RuntimeApiController::new(vmm.clone());
+        runtime.set_http_pause_held(true);
+        let census = runtime
+            .handle_request(
+                VmmAction::PageMetrics(Resource::Census, json!({"operation":"capture"})),
+                &mut events,
+            )
+            .unwrap();
+        let VmmData::PageMetrics(census) = census else {
+            panic!("missing census")
+        };
+        let arm = DirtyLogRequest {
+            operation: "arm".into(),
+            epoch: 1,
+            next_epoch: None,
+        };
+        runtime
+            .handle_request(VmmAction::DirtyLog(arm.clone()), &mut events)
+            .unwrap();
+        // Leave a real Paused ACK pending. Resume is sent to the vCPU, but the
+        // native all-ACK validation sees this stale ACK and fails before state update.
+        vmm.lock().unwrap().vm.as_kvm().unwrap().vcpus_handles()[0]
+            .send_event(VcpuEvent::Pause)
+            .unwrap();
+        assert!(
+            runtime
+                .handle_request(VmmAction::Resume, &mut events)
+                .is_err()
+        );
+        assert_eq!(
+            vmm.lock().unwrap().instance_info.state,
+            crate::vmm_config::instance_info::VmState::Paused
+        );
+        assert!(!runtime.http_pause_held);
+        assert!(
+            runtime
+                .handle_request(VmmAction::DirtyLog(arm), &mut events)
+                .is_err()
+        );
+        let rejected = runtime.handle_request(
+            VmmAction::PageMetrics(Resource::Census, json!({"operation":"capture"})),
+            &mut events,
+        );
+        assert!(matches!(rejected, Err(VmmActionError::PageMetrics(_))));
+        let exported=runtime.handle_request(VmmAction::PageMetrics(Resource::Census,json!({"operation":"export","record_id":census["record_id"],"kind":"resident","offset":0,"limit":1})), &mut events);
+        assert!(exported.is_ok());
+        // Consume the actual Resume ACK, recover native pause for cleanup,
+        // and prove a later successful hold does not clear measurement poison.
+        assert!(matches!(
+            vmm.lock().unwrap().vm.as_kvm().unwrap().vcpus_handles()[0]
+                .response_receiver()
+                .recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(VcpuResponse::Resumed)
+        ));
+        runtime
+            .handle_request(VmmAction::Pause, &mut events)
+            .unwrap();
+        runtime.set_http_pause_held(true);
+        assert!(
+            runtime
+                .handle_request(
+                    VmmAction::PageMetrics(Resource::Idle, json!({"operation":"arm","epoch":1})),
+                    &mut events
+                )
+                .is_err()
+        );
+        runtime
+            .handle_request(VmmAction::Resume, &mut events)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_lifecycle_pause_failure_allows_explicit_capture_abort() {
+        use crate::page_tracking::Resource;
+        use crate::vstate::vcpu::{VcpuEvent, VcpuResponse};
+        use serde_json::json;
+        let (vmm, mut events) = crate::test_utils::create_vmm(None, false, false, false, false);
+        crate::dirty_log::test_mmio(&mut vmm.lock().unwrap().device_manager)
+            .virtio_devices
+            .clear();
+        let mut runtime = RuntimeApiController::new(vmm.clone());
+        runtime.set_http_pause_held(true);
+        let begin=runtime.handle_request(VmmAction::PageMetrics(Resource::Metadata,json!({"operation":"begin","capture_id":"failure","mode":"attribution","consistency":"quiescence_only","max_bytes":4096,"max_scan_bytes":0})), &mut events).unwrap();
+        let VmmData::PageMetrics(begin) = begin else {
+            panic!("missing begin")
+        };
+        // Policy rejection preserves the held authority and usable capture.
+        assert!(
+            runtime
+                .handle_request(VmmAction::Resume, &mut events)
+                .is_err()
+        );
+        assert!(runtime.http_pause_held);
+        let info = json!({"operation":"info","capture_id":"failure","vm_generation":begin["vm_generation"]});
+        assert!(
+            runtime
+                .handle_request(
+                    VmmAction::PageMetrics(Resource::Metadata, info),
+                    &mut events
+                )
+                .is_ok()
+        );
+        // A real queued SaveState response makes the actual Pause ACK check fail.
+        vmm.lock().unwrap().vm.as_kvm().unwrap().vcpus_handles()[0]
+            .send_event(VcpuEvent::SaveState)
+            .unwrap();
+        assert!(
+            runtime
+                .handle_request(VmmAction::Pause, &mut events)
+                .is_err()
+        );
+        assert!(!runtime.http_pause_held);
+        let reads = json!({"operation":"read_pages","capture_id":"failure","vm_generation":begin["vm_generation"],"gpas":[0]});
+        assert!(
+            runtime
+                .handle_request(
+                    VmmAction::PageMetrics(Resource::Metadata, reads),
+                    &mut events
+                )
+                .is_err()
+        );
+        let abort = json!({"operation":"abort","capture_id":"failure","vm_generation":begin["vm_generation"],"reason":"native lifecycle uncertain"});
+        let discarded = runtime
+            .handle_request(
+                VmmAction::PageMetrics(Resource::Metadata, abort),
+                &mut events,
+            )
+            .unwrap();
+        let VmmData::PageMetrics(discarded) = discarded else {
+            panic!("missing discard")
+        };
+        assert_eq!(discarded["consistency"], "discarded");
+        assert!(matches!(
+            vmm.lock().unwrap().vm.as_kvm().unwrap().vcpus_handles()[0]
+                .response_receiver()
+                .recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(VcpuResponse::Paused)
+        ));
+        runtime
+            .handle_request(VmmAction::Pause, &mut events)
+            .unwrap();
+        runtime.set_http_pause_held(true);
+        assert!(
+            runtime
+                .handle_request(
+                    VmmAction::PageMetrics(Resource::Census, json!({"operation":"capture"})),
+                    &mut events
+                )
+                .is_err()
+        );
+        runtime
+            .handle_request(VmmAction::Resume, &mut events)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_aries_dirty_preboot_and_snapshot_conflicts() {
+        use crate::dirty_log::DirtyLogRequest;
+        assert!(matches!(
+            preboot_request(VmmAction::DirtyLog(DirtyLogRequest {
+                operation: "arm".into(),
+                epoch: 1,
+                next_epoch: None
+            })),
+            Err(VmmActionError::OperationNotSupportedPreBoot)
+        ));
+        let (vmm, mut events) = crate::test_utils::create_vmm(None, true, false, false, false);
+        crate::dirty_log::test_mmio(&mut vmm.lock().unwrap().device_manager)
+            .virtio_devices
+            .clear();
+        let mut runtime = RuntimeApiController::new(vmm);
+        runtime.set_http_pause_held(true);
+        runtime
+            .handle_request(
+                VmmAction::DirtyLog(DirtyLogRequest {
+                    operation: "arm".into(),
+                    epoch: 1,
+                    next_epoch: None,
+                }),
+                &mut events,
+            )
+            .unwrap();
+        for closed in [false, true] {
+            if closed {
+                runtime
+                    .handle_request(
+                        VmmAction::DirtyLog(DirtyLogRequest {
+                            operation: "collect".into(),
+                            epoch: 1,
+                            next_epoch: None,
+                        }),
+                        &mut events,
+                    )
+                    .unwrap();
+            }
+            let error = runtime
+                .handle_request(
+                    VmmAction::CreateSnapshot(CreateSnapshotParams {
+                        snapshot_type: SnapshotType::Full,
+                        snapshot_path: PathBuf::new(),
+                        mem_file_path: PathBuf::new(),
+                        sync_snapshot_files: true,
+                    }),
+                    &mut events,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(error,VmmActionError::NotSupported(ref message) if message.contains("snapshot resets conflict"))
+            );
+        }
     }
 
     fn runtime_request(request: VmmAction) -> Result<VmmData, VmmActionError> {

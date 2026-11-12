@@ -11,7 +11,9 @@ use vm_memory::GuestMemoryBackend;
 
 use crate::logger::error;
 use crate::utils::u64_to_usize;
-use crate::vstate::memory::{Bitmap, ByteValued, GuestAddress};
+use crate::vstate::memory::{
+    Bitmap, ByteValued, GuestAddress, GuestMemoryExtension, GuestMemoryRegion,
+};
 
 pub const VIRTQ_DESC_F_NEXT: u16 = 0x1;
 pub const VIRTQ_DESC_F_WRITE: u16 = 0x2;
@@ -195,6 +197,24 @@ impl Iterator for DescriptorIterator {
     }
 }
 
+// Owned cache keeps the region bitmaps alive alongside the existing queue pointers.
+#[derive(Clone, Debug)]
+pub(super) struct QueueDirtyMemory(crate::vstate::memory::GuestMemoryMmap);
+impl PartialEq for QueueDirtyMemory {
+    fn eq(&self, other: &Self) -> bool {
+        self.0
+            .iter()
+            .map(|r| (r.start_addr(), r.len(), r.as_ptr()))
+            .collect::<Vec<_>>()
+            == other
+                .0
+                .iter()
+                .map(|r| (r.start_addr(), r.len(), r.as_ptr()))
+                .collect::<Vec<_>>()
+    }
+}
+impl Eq for QueueDirtyMemory {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// A virtio queue's parameters.
 pub struct Queue {
@@ -259,6 +279,7 @@ pub struct Queue {
     /// Because types in the UsedRing are different (u16 and u32)
     /// store pointer as *mut u8.
     pub used_ring_ptr: *mut u8,
+    pub(super) used_ring_dirty_memory: Option<QueueDirtyMemory>,
 
     pub next_avail: Wrapping<u16>,
     pub next_used: Wrapping<u16>,
@@ -290,6 +311,7 @@ impl Queue {
             desc_table_ptr: std::ptr::null(),
             avail_ring_ptr: std::ptr::null_mut(),
             used_ring_ptr: std::ptr::null_mut(),
+            used_ring_dirty_memory: None,
 
             next_avail: Wrapping(0),
             next_used: Wrapping(0),
@@ -340,7 +362,10 @@ impl Queue {
 
     /// Set up pointers to the queue objects in the guest memory
     /// and mark memory dirty for those objects
-    pub fn initialize<M: GuestMemoryBackend>(&mut self, mem: &M) -> Result<(), QueueError> {
+    pub fn initialize(
+        &mut self,
+        mem: &crate::vstate::memory::GuestMemoryMmap,
+    ) -> Result<(), QueueError> {
         if !self.ready {
             return Err(QueueError::NotReady);
         }
@@ -368,6 +393,10 @@ impl Queue {
             self.get_aligned_slice_ptr(mem, self.avail_ring_address, self.avail_ring_size(), 2)?;
         self.used_ring_ptr =
             self.get_aligned_slice_ptr(mem, self.used_ring_address, self.used_ring_size(), 4)?;
+        self.used_ring_dirty_memory = mem
+            .iter()
+            .any(|r| r.bitmap().is_some())
+            .then(|| QueueDirtyMemory(mem.clone()));
 
         Ok(())
     }
@@ -402,6 +431,11 @@ impl Queue {
     /// Set UsedRing.idx
     #[inline(always)]
     pub fn used_ring_idx_set(&mut self, val: u16) {
+        if let Some(memory) = &self.used_ring_dirty_memory {
+            memory
+                .0
+                .mark_dirty(GuestAddress(self.used_ring_address.0 + (2) as u64), 2);
+        }
         // SAFETY: `idx` is 1 u16 away from the start
         unsafe {
             self.used_ring_ptr
@@ -416,6 +450,15 @@ impl Queue {
     /// The `index` parameter should be in 0..queue_size bounds
     #[inline(always)]
     unsafe fn used_ring_ring_set(&mut self, index: usize, val: UsedElement) {
+        if let Some(memory) = &self.used_ring_dirty_memory {
+            memory.0.mark_dirty(
+                GuestAddress(
+                    self.used_ring_address.0
+                        + (4 + index * std::mem::size_of::<UsedElement>()) as u64,
+                ),
+                std::mem::size_of::<UsedElement>(),
+            );
+        }
         // SAFETY: `ring` is 2 u16 away from the start
         unsafe {
             self.used_ring_ptr
@@ -444,6 +487,15 @@ impl Queue {
     /// Set UsedRing.avail_event
     #[inline(always)]
     pub fn used_ring_avail_event_set(&mut self, val: u16) {
+        if let Some(memory) = &self.used_ring_dirty_memory {
+            memory.0.mark_dirty(
+                GuestAddress(
+                    self.used_ring_address.0
+                        + (4 + usize::from(self.size) * std::mem::size_of::<UsedElement>()) as u64,
+                ),
+                2,
+            );
+        }
         // SAFETY: `avail_event` is 2 * u16 and self.len * UsedElement away from the start
         unsafe {
             self.used_ring_ptr
@@ -692,7 +744,7 @@ mod verification {
     use std::mem::ManuallyDrop;
     use std::num::Wrapping;
 
-    use vm_memory::{GuestMemoryBackend, GuestMemoryRegion, MemoryRegionAddress};
+    use vm_memory::{GuestMemoryRegion, MemoryRegionAddress};
 
     use super::*;
     use crate::vstate::memory::{Bytes, FileOffset, GuestAddress, MmapRegion};

@@ -410,6 +410,8 @@ pub struct VirtioBlock {
     pub disk: DiskProperties,
     pub rate_limiter: RateLimiter,
     pub is_io_engine_throttled: bool,
+    // A lost/unconfirmed completion invalidates all later measurement epochs.
+    pub(super) dirty_log_completion_error: Option<String>,
     pub metrics: Arc<BlockDeviceMetrics>,
 }
 
@@ -512,6 +514,7 @@ impl VirtioBlock {
             disk: disk_properties,
             rate_limiter,
             is_io_engine_throttled: false,
+            dirty_log_completion_error: None,
             metrics: BlockMetricsPerDevice::alloc(config.drive_id),
         })
     }
@@ -651,20 +654,27 @@ impl VirtioBlock {
     }
 
     fn process_async_completion_queue(&mut self) {
+        self.process_async_completion_queue_inner(true);
+    }
+
+    fn process_async_completion_queue_inner(&mut self, publish_empty: bool) {
         let engine = unwrap_async_file_engine_or_return!(&mut self.disk.file_engine);
 
         // This is safe since we checked in the event handler that the device is activated.
         let active_state = self.device_state.active_state().unwrap();
         let queue = &mut self.queues[0];
+        let mut completed = false;
 
         loop {
             match engine.pop(&active_state.mem) {
                 Err(error) => {
+                    self.dirty_log_completion_error = Some(error.to_string());
                     error!("Failed to read completed io_uring entry: {:?}", error);
                     break;
                 }
                 Ok(None) => break,
                 Ok(Some(cqe)) => {
+                    completed = true;
                     let res = cqe.result();
                     let user_data = cqe.user_data();
 
@@ -688,6 +698,11 @@ impl VirtioBlock {
                         });
                 }
             }
+        }
+        // Empty observer drains must not rewrite the used index and invalidate
+        // a metadata capture. Preserve the ordinary event-loop behavior.
+        if !completed && !publish_empty {
+            return;
         }
         queue.advance_used_ring_idx();
 
@@ -749,6 +764,27 @@ impl VirtioBlock {
         if let Err(err) = self.disk.file_engine.drain_and_flush(discard) {
             error!("Failed to drain ops and flush block data: {:?}", err);
         }
+    }
+
+    /// Drain all submitted async writes into guest RAM before dirty-log reset.
+    pub fn quiesce_dirty_log(&mut self) -> Result<(), String> {
+        if let Some(error) = &self.dirty_log_completion_error {
+            return Err(format!("unconfirmed async completion: {error}"));
+        }
+        if !self.is_activated() {
+            return Ok(());
+        }
+        self.disk
+            .file_engine
+            .drain(false)
+            .map_err(|e| e.to_string())?;
+        if let FileEngine::Async(_) = self.disk.file_engine {
+            self.process_async_completion_queue_inner(false);
+        }
+        if let Some(error) = &self.dirty_log_completion_error {
+            return Err(format!("unconfirmed async completion: {error}"));
+        }
+        Ok(())
     }
 
     /// Prepare device for being snapshotted.
@@ -1434,6 +1470,157 @@ mod tests {
             // Added status byte length.
             assert_eq!(vq.used.ring[0].get().len, vq.dtable[1].len.get() + 1);
             assert_eq!(mem.read_obj::<u32>(status_addr).unwrap(), VIRTIO_BLK_S_OK);
+        }
+    }
+
+    #[test]
+    fn test_aries_completion_failure_poison_is_sticky() {
+        use crate::devices::virtio::block::device::Block;
+        use crate::dirty_log::{DirtyLogRequest, DirtyLogState};
+        use crate::vstate::memory::Bitmap;
+        use vm_memory::GuestMemoryBackend;
+        for fail_before_barrier in [false, true] {
+            let (vm, mut events) = crate::test_utils::create_vmm(None, true, false, false, false);
+            let mut vm = vm.lock().unwrap();
+            crate::dirty_log::test_mmio(&mut vm.device_manager)
+                .virtio_devices
+                .retain(|(kind, _), _| {
+                    *kind == crate::devices::virtio::device::VirtioDeviceType::Block
+                });
+            let mem = vm.vm.as_kvm().unwrap().guest_memory().clone();
+            let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
+            let mut block = default_block(FileEngineType::Async);
+            set_queue(&mut block, 0, vq.create_queue());
+            block.activate(mem.clone(), default_interrupt()).unwrap();
+            read_blk_req_descriptors(&vq);
+            let data = GuestAddress(vq.dtable[1].addr.get());
+            mem.write_obj::<u32>(VIRTIO_BLK_T_IN, GuestAddress(vq.dtable[0].addr.get()))
+                .unwrap();
+            vq.dtable[1].len.set(512);
+            mem.write_slice(&[0x77u8; 512], data).unwrap();
+            let device = std::sync::Arc::new(std::sync::Mutex::new(Block::Virtio(block)));
+            let mut cmdline = linux_loader::cmdline::Cmdline::new(4096).unwrap();
+            let vmm = &mut *vm;
+            crate::dirty_log::test_mmio(&mut vmm.device_manager)
+                .register_virtio_test_device(
+                    vmm.vm.as_kvm().unwrap(),
+                    mem.clone(),
+                    device,
+                    &mut events,
+                    &mut cmdline,
+                    "dirty-failure-fixture",
+                )
+                .unwrap();
+            assert_eq!(
+                crate::dirty_log::test_mmio(&mut vm.device_manager)
+                    .virtio_devices
+                    .len(),
+                1
+            );
+            let mut log = DirtyLogState::default();
+            log.transact(
+                &mut vm,
+                DirtyLogRequest {
+                    operation: "arm".into(),
+                    epoch: 1,
+                    next_epoch: None,
+                },
+            )
+            .unwrap();
+            // This sentinel must remain dirty if collection rejects before reset.
+            mem.write_obj(1u8, GuestAddress(0x6000)).unwrap();
+            crate::dirty_log::test_mmio(&mut vm.device_manager)
+                .virtio_devices
+                .values()
+                .try_for_each(|entry| {
+                    let transport = entry.inner.lock().unwrap();
+                    let mut dev = transport.locked_device();
+                    let Block::Virtio(block) = dev.as_mut_any().downcast_mut::<Block>().unwrap()
+                    else {
+                        panic!()
+                    };
+                    simulate_queue_event(block, None);
+                    if let FileEngine::Async(engine) = &mut block.disk.file_engine {
+                        engine.inject_completion_pop_error();
+                    } else {
+                        panic!()
+                    }
+                    if fail_before_barrier {
+                        block.disk.file_engine.drain(false).unwrap();
+                        block.process_async_completion_queue();
+                    }
+                    Ok::<(), String>(())
+                })
+                .unwrap();
+            let req = DirtyLogRequest {
+                operation: "collect".into(),
+                epoch: 1,
+                next_epoch: Some(2),
+            };
+            let error = log.transact(&mut vm, req.clone()).unwrap_err();
+            assert!(error.contains("unconfirmed async completion"), "{error}");
+            assert!(
+                log.transact(&mut vm, req)
+                    .unwrap_err()
+                    .contains("invalidated by prior")
+            );
+            assert!(
+                mem.find_region(GuestAddress(0x6000))
+                    .unwrap()
+                    .bitmap()
+                    .dirty_at(0x6000)
+            );
+        }
+    }
+
+    #[test]
+    fn test_aries_dirty_async_read_and_completion() {
+        use crate::vstate::memory::{Bitmap, GuestMemoryExtension};
+        use vm_memory::GuestMemoryBackend;
+        for engine in [FileEngineType::Sync, FileEngineType::Async] {
+            let mem = crate::vstate::memory::GuestMemoryMmap::from_regions(
+                crate::vstate::memory::anonymous(
+                    [(GuestAddress(0), 0x10000)].into_iter(),
+                    true,
+                    crate::vmm_config::machine_config::HugePageConfig::None,
+                )
+                .unwrap()
+                .into_iter()
+                .map(|region| {
+                    crate::vstate::memory::GuestRegionMmapExt::dram_from_mmap_region(region, 0)
+                })
+                .collect(),
+            )
+            .unwrap();
+            let mut block = default_block(engine);
+            let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
+            set_queue(&mut block, 0, vq.create_queue());
+            block.activate(mem.clone(), default_interrupt()).unwrap();
+            read_blk_req_descriptors(&vq);
+            let data = GuestAddress(vq.dtable[1].addr.get());
+            let status = GuestAddress(vq.dtable[2].addr.get());
+            mem.write_obj::<u32>(VIRTIO_BLK_T_IN, GuestAddress(vq.dtable[0].addr.get()))
+                .unwrap();
+            vq.dtable[1].len.set(512);
+            mem.write_slice(&[0x77u8; 512], data).unwrap();
+            mem.reset_dirty();
+            simulate_queue_event(&mut block, None);
+            block.quiesce_dirty_log().unwrap();
+            let mut payload = [1u8; 512];
+            mem.read_slice(&mut payload, data).unwrap();
+            assert_eq!(payload, [0u8; 512]);
+            assert_eq!(mem.read_obj::<u8>(status).unwrap(), VIRTIO_BLK_S_OK as u8);
+            let region = mem.find_region(data).unwrap();
+            assert!(region.bitmap().dirty_at(data.raw_value() as usize));
+            assert!(region.bitmap().dirty_at(status.raw_value() as usize));
+            assert!(region.bitmap().dirty_at(0));
+            mem.reset_dirty();
+            block.quiesce_dirty_log().unwrap();
+            assert!(!region.bitmap().dirty_at(data.raw_value() as usize));
+            assert!(
+                !region.bitmap().dirty_at(0),
+                "empty observer drain rewrote the used ring"
+            );
         }
     }
 

@@ -84,33 +84,45 @@ impl ApiServerAdapter {
         Ok(())
     }
 
-    fn _handle_request(&mut self, req_action: VmmAction, event_manager: &mut EventManager) {
+    fn _handle_request(&mut self, req_action: VmmAction, event_manager: &mut EventManager) -> bool {
+        let hold = match &req_action {
+            VmmAction::Pause => Some(true),
+            VmmAction::Resume => Some(false),
+            _ => None,
+        };
         let response = self.controller.handle_request(req_action, event_manager);
+        let succeeded = response.is_ok();
+        if succeeded {
+            if let Some(held) = hold {
+                self.controller.set_http_pause_held(held);
+            }
+        }
         // Send back the result.
         self.to_api
             .send(Box::new(response))
             .map_err(|_| ())
             .expect("one-shot channel closed");
+        succeeded
     }
 
     fn handle_request(&mut self, event_manager: &mut EventManager) {
         if let Some(api_request) = self.request.take() {
             let request_is_pause = *api_request == VmmAction::Pause;
-            self._handle_request(*api_request, event_manager);
+            let succeeded = self._handle_request(*api_request, event_manager);
 
             // If the latest req is a pause request, temporarily switch to a mode where we
             // do blocking `recv`s on the `from_api` receiver in a loop, until we get
             // unpaused. The device emulation is implicitly paused since we do not
             // relinquish control to the event manager because we're not returning from
             // `process`.
-            if request_is_pause {
+            if request_is_pause && succeeded {
                 // This loop only attempts to process API requests, so things like the
                 // metric flush timerfd handling are frozen as well.
                 loop {
                     let req = self.from_api.recv().expect("Error receiving API request.");
                     let req_is_resume = *req == VmmAction::Resume;
-                    self._handle_request(*req, event_manager);
-                    if req_is_resume {
+                    let succeeded = self._handle_request(*req, event_manager);
+                    if req_is_resume && succeeded {
                         break;
                     }
                 }

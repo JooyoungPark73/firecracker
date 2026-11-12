@@ -125,6 +125,7 @@ impl Persist<'_> for VirtioBlock {
         };
 
         Ok(VirtioBlock {
+            dirty_log_completion_error: None,
             avail_features,
             acked_features,
             config_space,

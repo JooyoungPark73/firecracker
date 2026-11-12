@@ -120,7 +120,7 @@ pub struct MachineConfig {
     )]
     pub cpu_template: Option<CpuTemplateType>,
     /// Enables or disables dirty page tracking. Enabling allows incremental snapshots.
-    #[serde(default)]
+    #[serde(default = "aries_dirty_tracking")]
     pub track_dirty_pages: bool,
     /// Configures what page size Firecracker should use to back guest memory.
     #[serde(default)]
@@ -158,6 +158,10 @@ where
     template.serialize(serializer)
 }
 
+fn aries_dirty_tracking() -> bool {
+    std::env::var("ARIES_DIRTY_LOG").as_deref() == Ok("1")
+}
+
 impl Default for MachineConfig {
     fn default() -> Self {
         Self {
@@ -165,7 +169,7 @@ impl Default for MachineConfig {
             mem_size_mib: DEFAULT_MEM_SIZE_MIB,
             smt: false,
             cpu_template: None,
-            track_dirty_pages: false,
+            track_dirty_pages: aries_dirty_tracking(),
             huge_pages: HugePageConfig::None,
             #[cfg(feature = "gdb")]
             gdb_socket_path: None,
@@ -289,7 +293,8 @@ impl MachineConfig {
             mem_size_mib,
             smt,
             cpu_template,
-            track_dirty_pages: update.track_dirty_pages.unwrap_or(self.track_dirty_pages),
+            track_dirty_pages: aries_dirty_tracking()
+                || update.track_dirty_pages.unwrap_or(self.track_dirty_pages),
             huge_pages: page_config,
             #[cfg(feature = "gdb")]
             gdb_socket_path: update.gdb_socket_path.clone(),

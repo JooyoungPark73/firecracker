@@ -81,6 +81,7 @@ pub(crate) mod device_manager;
 /// Emulates virtual and hardware devices.
 #[allow(missing_docs)]
 pub mod devices;
+pub mod dirty_log;
 /// minimalist HTTP/TCP/IPv4 stack named DUMBO
 pub mod dumbo;
 /// Support for GDB debugging the guest
@@ -90,6 +91,7 @@ pub mod gdb;
 pub mod logger;
 /// microVM Metadata Service MMDS
 pub mod mmds;
+pub mod page_tracking;
 /// PCI specific emulation code.
 pub mod pci;
 /// Save/restore utilities.
